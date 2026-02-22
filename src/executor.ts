@@ -588,7 +588,19 @@ function logResult(result: ExecutionResult): void {
 export async function initializeExecutor(connection: Connection): Promise<boolean> {
   console.log('  Initializing execution engine...');
 
-  const wallet = await (await import('./wallet')).validateWallet(connection);
+  const walletModule = await import('./wallet');
+
+  // Retry wallet validation up to 3 times (Helius RPC can be flaky on first call)
+  let wallet = await walletModule.validateWallet(connection);
+  if (!wallet.valid || wallet.usdcBalance === 0) {
+    for (let attempt = 2; attempt <= 3; attempt++) {
+      console.log(`  RPC returned incomplete data — retrying (${attempt}/3)...`);
+      await sleep(3000);
+      wallet = await walletModule.validateWallet(connection);
+      if (wallet.valid && wallet.usdcBalance > 0) break;
+    }
+  }
+
   if (!wallet.valid) {
     for (const err of wallet.errors) logError(`Wallet: ${err}`);
     return false;
