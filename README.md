@@ -145,11 +145,19 @@ TELEGRAM_CHAT_ID=
 DRY_RUN=false
 ```
 
-### Step 4: Run the bot
+### Step 4: Build and run the bot
 
 ```bash
-npm start
+# Compile the TypeScript code (required on first run)
+npm run build
+
+# Start the bot
+node dist/index.js
 ```
+
+> **Note:** `npm run build` compiles the code into the `dist/` folder. You only need to re-run it when the code changes. After that, `node dist/index.js` starts the bot.
+>
+> Alternatively, `npm start` runs the bot directly without a separate build step (using ts-node), but it's slower to start.
 
 You should see output like:
 
