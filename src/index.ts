@@ -1,4 +1,5 @@
 import { Connection } from '@solana/web3.js';
+import { execSync } from 'child_process';
 import { ScanCycleResult, Opportunity, WatchlistToken, TradingPair, DiscoveryCycleResult } from './types';
 import { CONFIG, TOKENS, DISCOVERY_CONFIG, EXECUTION_CONFIG } from './config';
 import { scanWatchlistToken, detectOpportunities, DetectionResult } from './scanner';
@@ -175,10 +176,34 @@ async function runScanCycle(
   };
 }
 
+// --- Auto-update ---
+
+function checkForUpdates(): void {
+  try {
+    const result = execSync('git pull --ff-only 2>&1', { encoding: 'utf-8', timeout: 15_000 }).trim();
+    if (result.includes('Already up to date')) {
+      console.log('  [Update] Already up to date.\n');
+    } else {
+      console.log(`  [Update] Pulled new changes:\n  ${result.split('\n').join('\n  ')}`);
+      console.log('\n  [!] Code updated — rebuilding and restarting...\n');
+      execSync('npx tsc', { encoding: 'utf-8', timeout: 60_000 });
+      console.log('  [Update] Rebuild complete. Restarting...\n');
+      // Re-launch the process so the new compiled code takes effect
+      const { argv } = process;
+      execSync(`node ${argv[1]}`, { stdio: 'inherit' });
+      process.exit(0);
+    }
+  } catch (err) {
+    // Non-fatal — if git isn't available or network is down, just continue with current code
+    console.log(`  [Update] Skipped (${err instanceof Error ? err.message.split('\n')[0] : err})\n`);
+  }
+}
+
 // --- Main ---
 
 async function main(): Promise<void> {
   logBanner();
+  checkForUpdates();
 
   let cycleNumber = 0;
   let totalOpportunities = 0;
