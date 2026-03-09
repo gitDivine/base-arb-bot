@@ -1,298 +1,79 @@
-import { Connection } from '@solana/web3.js';
-import { execSync } from 'child_process';
-import { ScanCycleResult, Opportunity, WatchlistToken, TradingPair, DiscoveryCycleResult } from './types';
-import { CONFIG, TOKENS, DISCOVERY_CONFIG, EXECUTION_CONFIG } from './config';
-import { scanWatchlistToken, detectOpportunities, DetectionResult } from './scanner';
-import { discoverTokens } from './discovery';
+// index.ts — Main entry point (updated for Base)
+import { CONFIG }      from './config';
+import { WalletManager } from './wallet';
+import { Scanner }     from './scanner';
+import { Executor }    from './executor';
+import { Discovery }   from './discovery';
+import { Logger }      from './logger';
 import { RateLimiter } from './rate-limiter';
-import { initializeExecutor, executeOpportunity, getBotState } from './executor';
-import { getUsdcBalance } from './wallet';
-import {
-  logBanner,
-  logCycleStart,
-  logCycleResult,
-  logOpportunity,
-  logError,
-  logOpportunityToFile,
-  logCycleToFile,
-  logDiscoveryStart,
-  logDiscoveryResult,
-  logDiscoveryToFile,
-  logWatchlistSample,
-  sendTelegramAlert,
-  formatOpportunityAlert,
-} from './logger';
 
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+async function main() {
+  const logger      = new Logger();
+  const rateLimiter = new RateLimiter(30, 1000);
+  const wallet      = new WalletManager();
+  const scanner     = new Scanner(wallet, logger, rateLimiter);
+  const executor    = new Executor(wallet, logger);
+  const discovery   = new Discovery(logger, rateLimiter);
 
-// --- State ---
-let watchlist: WatchlistToken[] = [];
-const jupiterLimiter = new RateLimiter(50, 60_000);
+  console.log('\n  ╔══════════════════════════════════════╗');
+  console.log('  ║   Base Flash Loan Arbitrage Bot v1   ║');
+  console.log('  ║   Chain: Base Mainnet                ║');
+  console.log('  ║   DEXes: Uniswap V3 + Aerodrome      ║');
+  console.log('  ║   Loans: Aave V3 (zero capital)      ║');
+  console.log('  ╚══════════════════════════════════════╝\n');
 
-// --- Discovery ---
+  // Validate config
+  if (!CONFIG.wallet.privateKey)      throw new Error('Missing PRIVATE_KEY in .env');
+  if (!CONFIG.wallet.contractAddress) throw new Error('Missing CONTRACT_ADDRESS in .env');
+  if (!CONFIG.chain.rpcWs)            throw new Error('Missing BASE_WS_URL in .env');
+  if (!CONFIG.chain.rpcHttp)          throw new Error('Missing BASE_HTTP_URL in .env');
 
-async function runDiscovery(onProgress?: (checked: number, total: number) => void): Promise<DiscoveryCycleResult> {
-  const start = Date.now();
-  const oldMints = new Set(watchlist.map(w => w.token.mint));
+  // Show wallet info
+  const ethBal  = await wallet.getEthBalance();
+  const usdcBal = await wallet.getUsdcBalance();
+  logger.info('Wallet', `Address: ${wallet.signer.address.slice(0, 10)}...`);
+  logger.info('Wallet', `ETH: ${ethBal.toFixed(4)} | USDC: ${usdcBal.toFixed(2)} | Mode: ${CONFIG.dryRun ? 'DRY RUN' : 'LIVE'}`);
+  logger.info('Config', `Min gap: ${CONFIG.arb.minProfitBps}bps | Flash loan: $${CONFIG.arb.flashLoanAmount.toLocaleString()} | Min profit: $${CONFIG.arb.minProfitUsdc}`);
 
-  const newWatchlist = await discoverTokens(watchlist, onProgress);
-  const newMints = new Set(newWatchlist.map(w => w.token.mint));
-
-  const added = newWatchlist.filter(w => !oldMints.has(w.token.mint)).length;
-  const removed = watchlist.filter(w => !newMints.has(w.token.mint)).length;
-
-  watchlist = newWatchlist;
-
-  return {
-    tokensScanned: newWatchlist.length + removed,
-    watchlistSize: watchlist.length,
-    newTokens: added,
-    removedTokens: removed,
-    durationMs: Date.now() - start,
-    timestamp: new Date(),
-  };
-}
-
-// --- Scanning ---
-
-const USDC = TOKENS.USDC;
-const SCAN_AMOUNT_USDC_FALLBACK = 10_000_000; // 10 USDC fallback
-const PARALLEL_SCAN_COUNT = 3; // scan 3 tokens concurrently
-
-/** Get scan amount based on actual USDC balance (matches trade size) */
-async function getScanAmount(connection: Connection | null): Promise<number> {
-  if (!connection) return SCAN_AMOUNT_USDC_FALLBACK;
-  try {
-    const balance = await getUsdcBalance(connection);
-    const reserve = EXECUTION_CONFIG.refuelUsdcAmount;
-    const tradeSize = Math.floor(Math.max(0, balance - reserve) * EXECUTION_CONFIG.tradePercentage);
-    // Use actual trade size if we have enough, otherwise fallback to $10
-    return tradeSize > 1_000_000 ? tradeSize : SCAN_AMOUNT_USDC_FALLBACK;
-  } catch {
-    return SCAN_AMOUNT_USDC_FALLBACK;
-  }
-}
-
-async function runScanCycle(
-  cycleNumber: number,
-  connection: Connection | null,
-  executorReady: boolean,
-  onExecuted: () => void,
-): Promise<{
-  result: ScanCycleResult;
-  opportunities: Opportunity[];
-  closestGapBps: number;
-  closestGapInfo: string;
-}> {
-  const start = Date.now();
-  const allOpportunities: Opportunity[] = [];
-  let totalQuotes = 0;
-  let bestGapBps = -Infinity;
-  let bestGapInfo = '';
-  let pairsScanned = 0;
-  let tradedThisCycle = false;
-
-  // Scan at actual trade size to eliminate false positives
-  const scanAmount = await getScanAmount(connection);
-  const scanAmountUsd = (scanAmount / 1e6).toFixed(2);
-
-  // Process tokens in parallel batches of PARALLEL_SCAN_COUNT
-  for (let i = 0; i < watchlist.length; i += PARALLEL_SCAN_COUNT) {
-    if (tradedThisCycle) break; // stop scanning if we already traded
-
-    const batch = watchlist.slice(i, i + PARALLEL_SCAN_COUNT);
-    const results = await Promise.all(batch.map(async (wt) => {
-      try {
-        const pair: TradingPair = {
-          tokenA: USDC,
-          tokenB: wt.token,
-          label: `USDC/${wt.token.symbol}`,
-        };
-
-        const { forward, reverse } = await scanWatchlistToken(
-          wt, USDC, scanAmount, jupiterLimiter,
-        );
-
-        return { pair, forward, reverse, quotes: forward.length + reverse.length };
-      } catch (err) {
-        logError(`Failed scanning ${wt.token.symbol}: ${err}`);
-        return null;
-      }
-    }));
-
-    for (const r of results) {
-      if (!r) continue;
-      totalQuotes += r.quotes;
-      pairsScanned++;
-
-      if (r.forward.length >= 2 || r.reverse.length >= 2) {
-        const det: DetectionResult = detectOpportunities(r.pair, r.forward, r.reverse);
-
-        if (det.closestGapBps > bestGapBps) {
-          bestGapBps = det.closestGapBps;
-          bestGapInfo = `${r.pair.label} ${det.closestGapPair}`;
-        }
-
-        // Immediate execution: try to trade the moment we find a good opportunity
-        for (const opp of det.opportunities) {
-          allOpportunities.push(opp);
-          logOpportunity(opp);
-          logOpportunityToFile(opp);
-
-          if (opp.profitBps >= DISCOVERY_CONFIG.minAlertProfitBps) {
-            sendTelegramAlert(formatOpportunityAlert(opp)).catch(() => {});
-          }
-
-          if (!tradedThisCycle && executorReady && connection && opp.profitBps >= EXECUTION_CONFIG.minExecutionBps) {
-            const execResult = await executeOpportunity(connection, opp);
-            if (execResult) {
-              tradedThisCycle = true;
-              onExecuted();
-              break; // one trade per cycle
-            }
-          }
-        }
-      }
-    }
+  // Warn if ETH is low
+  if (ethBal < 0.001 && !CONFIG.dryRun) {
+    logger.warn('Wallet', 'ETH balance is very low — top up to cover gas fees');
   }
 
-  allOpportunities.sort((a, b) => b.netProfitUsd - a.netProfitUsd);
+  // Discovery run
+  await discovery.run();
 
-  return {
-    opportunities: allOpportunities,
-    closestGapBps: bestGapBps,
-    closestGapInfo: bestGapInfo,
-    result: {
-      cycleNumber,
-      timestamp: new Date(),
-      pairsScanned,
-      quotesCollected: totalQuotes,
-      opportunitiesFound: allOpportunities.length,
-      bestOpportunity: allOpportunities[0] ?? null,
-      durationMs: Date.now() - start,
-    },
-  };
-}
+  // Wire scanner → executor
+  scanner.onOpportunity(async (opp) => {
+    await executor.execute(opp);
+  });
 
-// --- Auto-update ---
+  // Start WebSocket scanner
+  await scanner.start();
 
-function checkForUpdates(): void {
-  try {
-    const result = execSync('git pull --ff-only 2>&1', { encoding: 'utf-8', timeout: 15_000 }).trim();
-    if (result.includes('Already up to date')) {
-      console.log('  [Update] Already up to date.\n');
-    } else {
-      console.log(`  [Update] Pulled new changes:\n  ${result.split('\n').join('\n  ')}`);
-      console.log('\n  [!] Code updated — rebuilding and restarting...\n');
-      execSync('npx tsc', { encoding: 'utf-8', timeout: 60_000 });
-      console.log('  [Update] Rebuild complete. Restarting...\n');
-      // Re-launch the process so the new compiled code takes effect
-      const { argv } = process;
-      execSync(`node ${argv[1]}`, { stdio: 'inherit' });
-      process.exit(0);
-    }
-  } catch (err) {
-    // Non-fatal — if git isn't available or network is down, just continue with current code
-    console.log(`  [Update] Skipped (${err instanceof Error ? err.message.split('\n')[0] : err})\n`);
-  }
-}
+  logger.success('Bot', `Live on Base. Listening for price gaps >= ${CONFIG.arb.minProfitBps}bps across Uniswap V3 + Aerodrome`);
 
-// --- Main ---
+  // Stats every 60 seconds
+  setInterval(() => {
+    const stats = executor.getStats();
+    logger.info('Stats',
+      `Trades: ${stats.tradesExecuted} executed / ${stats.tradesFailed} reverted | ` +
+      `Success rate: ${stats.successRate} | Total profit: $${stats.totalProfit.toFixed(2)}`
+    );
+  }, 60_000);
 
-async function main(): Promise<void> {
-  logBanner();
-  checkForUpdates();
+  // Rediscover tokens every 10 minutes
+  setInterval(() => discovery.run(), CONFIG.discovery.refreshIntervalMs);
 
-  let cycleNumber = 0;
-  let totalOpportunities = 0;
-
+  // Keep process alive
   process.on('SIGINT', () => {
-    console.log('\n\nShutting down scanner...');
-    console.log(`Total opportunities detected across ${cycleNumber} cycles: ${totalOpportunities}`);
-    console.log(`Watchlist size: ${watchlist.length} tokens`);
+    const stats = executor.getStats();
+    logger.info('Bot', `Shutting down. Final profit: $${stats.totalProfit.toFixed(2)}`);
     process.exit(0);
   });
-
-  // --- Initial discovery ---
-  console.log('  Starting initial token discovery...');
-  console.log('  (First run downloads token list — may take 1-2 minutes)\n');
-
-  logDiscoveryStart();
-  const discoveryResult = await runDiscovery((checked, total) => {
-    process.stdout.write(`\r  Checking tokens: ${checked}/${total}...`);
-  });
-  logDiscoveryResult(discoveryResult);
-  logDiscoveryToFile(discoveryResult);
-  logWatchlistSample(watchlist.map(w => ({
-    symbol: w.token.symbol,
-    dexes: w.dexes,
-    dailyVolume: w.dailyVolume,
-  })));
-
-  if (watchlist.length === 0) {
-    console.log('\n  No tokens found matching criteria. Will retry in 10 minutes...\n');
-  }
-
-  const tgStatus = CONFIG.telegramBotToken && CONFIG.telegramChatId
-    ? 'configured' : 'not configured';
-  console.log(`\n  Watchlist: ${watchlist.length} tokens | Scan interval: ${DISCOVERY_CONFIG.scanIntervalMs / 1000}s | Telegram: ${tgStatus}\n`);
-
-  // --- Initialize execution engine ---
-  const connection = new Connection(EXECUTION_CONFIG.rpcUrl, 'confirmed');
-  let executorReady = false;
-  try {
-    executorReady = await initializeExecutor(connection);
-  } catch (err) {
-    logError(`Executor init failed: ${err}`);
-  }
-  if (!executorReady) {
-    console.log('  [!] Execution engine unavailable — running in scan-only mode\n');
-  }
-
-  // --- Periodic re-discovery (every 10 min) ---
-  setInterval(async () => {
-    try {
-      logDiscoveryStart();
-      const result = await runDiscovery();
-      logDiscoveryResult(result);
-      logDiscoveryToFile(result);
-    } catch (err) {
-      logError(`Discovery failed: ${err}`);
-    }
-  }, DISCOVERY_CONFIG.discoveryIntervalMs);
-
-  // --- Scan loop ---
-  while (true) {
-    if (watchlist.length === 0) {
-      await sleep(DISCOVERY_CONFIG.scanIntervalMs);
-      continue;
-    }
-
-    cycleNumber++;
-    logCycleStart(cycleNumber);
-
-    const { result, closestGapBps, closestGapInfo } = await runScanCycle(
-      cycleNumber, connection, executorReady, () => { /* onExecuted callback */ },
-    );
-    totalOpportunities += result.opportunitiesFound;
-
-    logCycleResult(result, closestGapBps, closestGapInfo);
-    logCycleToFile(result);
-
-    // If 0 quotes, Jupiter is likely throttling — back off 3 min instead of hammering
-    if (result.quotesCollected === 0) {
-      console.log('  [!] No quotes received — backing off 3 minutes...');
-      await sleep(180_000);
-    } else {
-      const sleepTime = Math.max(5000, DISCOVERY_CONFIG.scanIntervalMs - result.durationMs);
-      await sleep(sleepTime);
-    }
-  }
 }
 
-main().catch((err) => {
-  logError(`Fatal: ${err}`);
+main().catch(err => {
+  console.error('Fatal error:', err.message);
   process.exit(1);
 });

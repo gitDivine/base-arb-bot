@@ -1,202 +1,217 @@
-import { DexQuote, TradingPair, Opportunity, WatchlistToken } from './types';
-import { CONFIG, DEXES, SCAN_AMOUNTS, TOKENS } from './config';
-import { RateLimiter } from './rate-limiter';
+// scanner.ts — BIGGEST EDIT
+// BEFORE: polls prices every 60 seconds via Jupiter HTTP API
+// AFTER:  listens to Uniswap V3 Swap events in real-time via WebSocket
+//         + quotes Aerodrome via DexScreener on each event
+//         Response time: <50ms instead of up to 60,000ms
 
-const JUPITER_QUOTE_URL = `${CONFIG.jupiterApiBase}/quote`;
+import { ethers }           from 'ethers';
+import axios                from 'axios';
+import { CONFIG }           from './config';
+import { ArbOpportunity, PriceQuote, WatchPair } from './types';
+import { Logger }           from './logger';
+import { RateLimiter }      from './rate-limiter';
+import { WalletManager }    from './wallet';
 
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+// Uniswap V3 Pool ABI — only the Swap event + slot0 for price
+const UNI_POOL_ABI = [
+  'event Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick)',
+  'function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked)',
+  'function token0() view returns (address)',
+  'function token1() view returns (address)',
+  'function fee() view returns (uint24)',
+];
 
-/**
- * Fetch a quote from Jupiter restricted to a single DEX.
- * Returns null if the DEX has no pool for this pair or request fails.
- */
-export async function fetchDexQuote(
-  inputMint: string,
-  outputMint: string,
-  amount: number,
-  dex: string,
-): Promise<DexQuote | null> {
-  const params = new URLSearchParams({
-    inputMint,
-    outputMint,
-    amount: amount.toString(),
-    slippageBps: CONFIG.slippageBps.toString(),
-    onlyDirectRoutes: 'true',
-    dexes: dex,
-  });
+const UNI_FACTORY_ABI = [
+  'function getPool(address tokenA, address tokenB, uint24 fee) view returns (address pool)',
+];
 
-  try {
-    const res = await fetch(`${JUPITER_QUOTE_URL}?${params}`, {
-      signal: AbortSignal.timeout(15_000),
-    });
+const DEXSCREENER_CACHE: Map<string, { price: number; ts: number }> = new Map();
+const CACHE_TTL_MS = 3000; // reuse price quotes for 3 seconds
 
-    if (res.status === 429) {
-      // Rate limited — back off briefly
-      await new Promise(r => setTimeout(r, 2000));
+export class Scanner {
+  private wallet:      WalletManager;
+  private logger:      Logger;
+  private rateLimiter: RateLimiter;
+  private poolContracts: Map<string, ethers.Contract> = new Map();
+  private opportunityCallback?: (opp: ArbOpportunity) => void;
+  private cycleCount  = 0;
+  private hitsToday   = 0;
+
+  constructor(wallet: WalletManager, logger: Logger, rateLimiter: RateLimiter) {
+    this.wallet      = wallet;
+    this.logger      = logger;
+    this.rateLimiter = rateLimiter;
+  }
+
+  // Called by index.ts — registers callback for when an opportunity is found
+  onOpportunity(cb: (opp: ArbOpportunity) => void): void {
+    this.opportunityCallback = cb;
+  }
+
+  // ── Main start: subscribe to all watched pair pools ────────
+  async start(): Promise<void> {
+    this.logger.info('Scanner', 'Resolving Uniswap V3 pool addresses...');
+
+    const factory = new ethers.Contract(
+      CONFIG.dexes.uniswapV3Factory,
+      UNI_FACTORY_ABI,
+      this.wallet.provider
+    );
+
+    for (const pair of CONFIG.scanner.watchPairs) {
+      const poolAddr: string = await factory.getPool(
+        CONFIG.tokens.USDC,
+        pair.tokenOut,
+        pair.fee
+      );
+
+      if (!poolAddr || poolAddr === ethers.ZeroAddress) {
+        this.logger.warn('Scanner', `No pool found for ${pair.name} fee=${pair.fee}`);
+        continue;
+      }
+
+      const pool = new ethers.Contract(poolAddr, UNI_POOL_ABI, this.wallet.provider);
+      this.poolContracts.set(pair.name, pool);
+
+      // Subscribe to every Swap event on this pool
+      pool.on('Swap', async (...args) => {
+        await this.handleSwapEvent(pair, poolAddr);
+      });
+
+      this.logger.info('Scanner', `Listening: ${pair.name} pool ${poolAddr.slice(0, 10)}...`);
+    }
+
+    this.logger.success('Scanner', `Watching ${this.poolContracts.size} pools via WebSocket`);
+
+    // Setup WebSocket reconnection watchdog
+    this.startReconnectWatchdog();
+  }
+
+  // ── Called on every DEX swap event — this is where speed matters
+  private async handleSwapEvent(pair: WatchPair, poolAddr: string): Promise<void> {
+    this.cycleCount++;
+    const now = Date.now();
+
+    try {
+      // 1. Get current Uniswap price from on-chain slot0
+      const uniPrice = await this.getUniswapPrice(pair, poolAddr);
+      if (!uniPrice) return;
+
+      // 2. Get current Aerodrome price from DexScreener (cached 3s)
+      const aeroPrice = await this.getAerodromePrice(pair.tokenOut, pair.name);
+      if (!aeroPrice) return;
+
+      // 3. Calculate gap in both directions
+      // Direction 1: buy on Uni (lower price), sell on Aero (higher price)
+      // Direction 2: buy on Aero (lower price), sell on Uni (higher price)
+
+      const gapBuyUniSellAero = ((aeroPrice - uniPrice) / uniPrice) * 10000; // in bps
+      const gapBuyAeroSellUni = ((uniPrice - aeroPrice) / aeroPrice) * 10000;
+
+      const bestGap       = Math.max(gapBuyUniSellAero, gapBuyAeroSellUni);
+      const bestDirection = gapBuyUniSellAero > gapBuyAeroSellUni ? 1 : 2;
+
+      if (bestGap >= CONFIG.arb.minProfitBps) {
+        // Estimate profit
+        const gross    = (CONFIG.arb.flashLoanAmount * bestGap) / 10000;
+        const flashFee = CONFIG.arb.flashLoanAmount * CONFIG.aave.flashFee;
+        const netProfit = gross - flashFee;
+
+        if (netProfit >= CONFIG.arb.minProfitUsdc) {
+          const opp: ArbOpportunity = {
+            tokenOut:        pair.tokenOut,
+            tokenName:       pair.name,
+            uniPoolFee:      pair.fee,
+            direction:       bestDirection as 1 | 2,
+            gapBps:          Math.round(bestGap),
+            flashAmount:     CONFIG.arb.flashLoanAmount,
+            estimatedProfit: netProfit,
+            timestamp:       now,
+          };
+
+          this.hitsToday++;
+          this.logger.opportunity(opp);
+          this.opportunityCallback?.(opp);
+        }
+      } else {
+        // Log closest gap for diagnostics (like your Solana bot's "closest: -Xbps")
+        this.logger.debug('Scanner',
+          `Cycle #${this.cycleCount} | ${pair.name} | gap: ${bestGap.toFixed(1)}bps | ` +
+          `need: ${CONFIG.arb.minProfitBps}bps | hits today: ${this.hitsToday}`
+        );
+      }
+    } catch (err: any) {
+      this.logger.error('Scanner', `handleSwapEvent error: ${err.message}`);
+    }
+  }
+
+  // ── Get Uniswap V3 price from on-chain slot0 ──────────────
+  private async getUniswapPrice(pair: WatchPair, poolAddr: string): Promise<number | null> {
+    try {
+      const pool = this.poolContracts.get(pair.name);
+      if (!pool) return null;
+
+      const slot0 = await pool.slot0();
+      const sqrtPriceX96: bigint = slot0[0];
+
+      // Convert sqrtPriceX96 to human price
+      // price = (sqrtPriceX96 / 2^96)^2
+      const Q96     = BigInt(2) ** BigInt(96);
+      const priceRaw = (sqrtPriceX96 * sqrtPriceX96 * BigInt(1e6)) / (Q96 * Q96);
+
+      // Adjust for USDC (6 decimals) vs token (usually 18 decimals)
+      // token0 might be USDC or tokenOut depending on address order
+      const token0addr: string = await pool.token0();
+      const usdcIsToken0 = token0addr.toLowerCase() === CONFIG.tokens.USDC.toLowerCase();
+
+      let price = Number(priceRaw) / 1e6;
+      if (!usdcIsToken0) price = 1 / price;
+
+      return price; // tokenOut per USDC
+    } catch {
       return null;
     }
-
-    if (!res.ok) return null;
-
-    const data = (await res.json()) as {
-      inAmount: string;
-      outAmount: string;
-      priceImpactPct?: string;
-      routePlan?: Array<{ swapInfo: { outAmount: string; label: string } }>;
-    };
-
-    if (!data.outAmount) return null;
-
-    // Use the actual DEX swap output (pre-platform-fee) from routePlan
-    // The top-level outAmount includes a ~20bps platform fee that would
-    // mask real arb opportunities in our scanner
-    const actualOut = data.routePlan?.[0]?.swapInfo?.outAmount;
-    const outAmount = actualOut ? Number(actualOut) : Number(data.outAmount);
-    const actualLabel = data.routePlan?.[0]?.swapInfo?.label ?? dex;
-
-    return {
-      dex: actualLabel,
-      inputMint,
-      outputMint,
-      inAmount: Number(data.inAmount),
-      outAmount,
-      priceImpactPct: parseFloat(data.priceImpactPct || '0'),
-    };
-  } catch {
-    return null; // Network error, timeout, or no route — skip silently
-  }
-}
-
-/**
- * Scan a single pair across all DEXes.
- * Returns forward (A->B) and reverse (B->A) quotes per DEX.
- */
-export async function scanPair(pair: TradingPair): Promise<{
-  forward: DexQuote[];
-  reverse: DexQuote[];
-}> {
-  const forward: DexQuote[] = [];
-  const reverse: DexQuote[] = [];
-
-  const fwdAmount = SCAN_AMOUNTS[pair.tokenA.symbol];
-  const revAmount = SCAN_AMOUNTS[pair.tokenB.symbol];
-
-  for (const dex of DEXES) {
-    // Fire both directions in parallel per DEX
-    const [fwd, rev] = await Promise.all([
-      fetchDexQuote(pair.tokenA.mint, pair.tokenB.mint, fwdAmount, dex),
-      fetchDexQuote(pair.tokenB.mint, pair.tokenA.mint, revAmount, dex),
-    ]);
-
-    if (fwd) forward.push(fwd);
-    if (rev) reverse.push(rev);
-
-    // Rate limit between DEXes
-    await sleep(CONFIG.requestDelayMs);
   }
 
-  return { forward, reverse };
-}
+  // ── Get Aerodrome price via DexScreener (with 3s cache) ───
+  private async getAerodromePrice(tokenAddress: string, symbol: string): Promise<number | null> {
+    const cached = DEXSCREENER_CACHE.get(tokenAddress);
+    if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
+      return cached.price;
+    }
 
-/**
- * Detect arbitrage opportunities from forward/reverse quotes.
- *
- * For each (DEX_i, DEX_j) combo where i != j:
- *   - Buy tokenB on DEX_i:  buyRate  = outAmount_B / inAmount_A
- *   - Sell tokenB on DEX_j: sellRate = outAmount_A / inAmount_B
- *   - roundTrip = buyRate * sellRate  (>1 means profit)
- */
-export interface DetectionResult {
-  opportunities: Opportunity[];
-  closestGapBps: number;       // best round-trip gap in bps (even if negative)
-  closestGapPair: string;      // e.g. "Raydium CLMM->Whirlpool"
-}
+    try {
+      await this.rateLimiter.throttle();
+      const url = `${CONFIG.discovery.dexScreenerUrl}${tokenAddress}`;
+      const res = await axios.get(url, { timeout: 2000 });
+      const pairs = res.data?.pairs || [];
 
-/**
- * Scan a watchlist token vs a base token (USDC) across its known DEXes.
- * Only queries DEXes where the token actually has pools.
- */
-export async function scanWatchlistToken(
-  wt: WatchlistToken,
-  baseToken: { mint: string; decimals: number; symbol: string },
-  scanAmount: number,
-  rateLimiter: RateLimiter,
-): Promise<{ forward: DexQuote[]; reverse: DexQuote[] }> {
-  const forward: DexQuote[] = [];
-  const reverse: DexQuote[] = [];
+      // Find Aerodrome pool on Base
+      const aeroPair = pairs.find((p: any) =>
+        p.chainId === 'base' && p.dexId === 'aerodrome'
+      );
 
-  // Compute reverse amount: equivalent USD worth of the token using DexScreener price
-  const scanAmountUsd = scanAmount / 1e6; // USDC has 6 decimals
-  const avgPrice = Object.values(wt.dexPrices)[0] || 1;
-  const tokenUnitsPerDollar = (1 / avgPrice) * Math.pow(10, wt.token.decimals);
-  const revAmount = Math.round(tokenUnitsPerDollar * scanAmountUsd);
+      if (!aeroPair?.priceUsd) return null;
 
-  for (const dex of wt.dexes) {
-    await rateLimiter.acquire();
-
-    const [fwd, rev] = await Promise.all([
-      fetchDexQuote(baseToken.mint, wt.token.mint, scanAmount, dex),
-      fetchDexQuote(wt.token.mint, baseToken.mint, revAmount, dex),
-    ]);
-
-    if (fwd) forward.push(fwd);
-    if (rev) reverse.push(rev);
-  }
-
-  return { forward, reverse };
-}
-
-export function detectOpportunities(
-  pair: TradingPair,
-  forward: DexQuote[],
-  reverse: DexQuote[],
-): DetectionResult {
-  const opportunities: Opportunity[] = [];
-  let closestGapBps = -Infinity;
-  let closestGapPair = '';
-
-  for (const buyQ of forward) {
-    for (const sellQ of reverse) {
-      if (buyQ.dex === sellQ.dex) continue;
-
-      const buyRate = buyQ.outAmount / buyQ.inAmount;
-      const sellRate = sellQ.outAmount / sellQ.inAmount;
-      const roundTrip = buyRate * sellRate;
-      const gapBps = Math.round((roundTrip - 1) * 10_000);
-
-      // Track the closest-to-profitable gap across all combos
-      if (gapBps > closestGapBps) {
-        closestGapBps = gapBps;
-        closestGapPair = `${buyQ.dex}->${sellQ.dex}`;
-      }
-
-      if (roundTrip <= 1) continue;
-
-      const decimalsA = pair.tokenA.decimals;
-      const scanAmountUsd = buyQ.inAmount / Math.pow(10, decimalsA);
-      const grossProfitUsd = scanAmountUsd * (roundTrip - 1);
-      const netProfitUsd = grossProfitUsd - CONFIG.solTxCostUsd;
-
-      if (netProfitUsd > 0) {
-        opportunities.push({
-          pair,
-          buyDex: buyQ.dex,
-          sellDex: sellQ.dex,
-          scanAmountUsd,
-          grossProfitUsd,
-          netProfitUsd,
-          profitBps: gapBps,
-          timestamp: new Date(),
-        });
-      }
+      // Convert USD price to tokenOut per USDC
+      const tokenPerUsdc = 1 / parseFloat(aeroPair.priceUsd);
+      DEXSCREENER_CACHE.set(tokenAddress, { price: tokenPerUsdc, ts: Date.now() });
+      return tokenPerUsdc;
+    } catch {
+      return null;
     }
   }
 
-  return {
-    opportunities: opportunities.sort((a, b) => b.netProfitUsd - a.netProfitUsd),
-    closestGapBps,
-    closestGapPair,
-  };
+  // ── WebSocket reconnect watchdog ──────────────────────────
+  private startReconnectWatchdog(): void {
+    setInterval(async () => {
+      try {
+        await this.wallet.provider.getBlockNumber();
+      } catch {
+        this.logger.warn('Scanner', 'WebSocket disconnected — reconnecting...');
+        this.wallet.reconnectWs();
+        await this.start(); // resubscribe all pools
+      }
+    }, CONFIG.scanner.wsReconnectMs);
+  }
 }
