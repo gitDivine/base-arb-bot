@@ -101,7 +101,9 @@ contract ArbBot is IFlashLoanSimpleReceiver {
     }
 
     function withdrawEth() external onlyOwner {
-        payable(owner).transfer(address(this).balance);
+        uint256 balance = address(this).balance;
+        (bool success, ) = payable(owner).call{value: balance}("");
+        require(success, "ETH transfer failed");
     }
 
     receive() external payable {}
