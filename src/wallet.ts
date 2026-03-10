@@ -1,6 +1,6 @@
 // wallet.ts — EDITED: Solana Keypair → EVM ethers.js wallet
 import { ethers } from 'ethers';
-import { CONFIG }  from './config';
+import { CONFIG } from './config';
 
 // ArbBot contract ABI (only what the bot needs)
 const ARB_BOT_ABI = [
@@ -17,21 +17,21 @@ const ERC20_ABI = [
 ];
 
 export class WalletManager {
-  public  provider: ethers.WebSocketProvider;
+  public provider: ethers.WebSocketProvider;
   private httpProvider: ethers.JsonRpcProvider;
-  public  signer:   ethers.Wallet;
-  public  contract: ethers.Contract;
+  public signer: ethers.Wallet;
+  public contract: ethers.Contract;
 
   constructor() {
-    this.httpProvider = new ethers.JsonRpcProvider(CONFIG.chain.rpcHttp);
-    this.provider     = new ethers.WebSocketProvider(CONFIG.chain.rpcWs);
-    this.signer       = new ethers.Wallet(CONFIG.wallet.privateKey, this.httpProvider);
-    this.contract     = new ethers.Contract(CONFIG.wallet.contractAddress, ARB_BOT_ABI, this.signer);
+    this.httpProvider = new ethers.JsonRpcProvider(CONFIG.chain.rpcHttp, 8453, { staticNetwork: true });
+    this.provider = new ethers.WebSocketProvider(CONFIG.chain.rpcWs, 8453, { staticNetwork: true });
+    this.signer = new ethers.Wallet(CONFIG.wallet.privateKey, this.httpProvider);
+    this.contract = new ethers.Contract(CONFIG.wallet.contractAddress, ARB_BOT_ABI, this.signer);
   }
 
   async getUsdcBalance(): Promise<number> {
     const usdc = new ethers.Contract(CONFIG.tokens.USDC, ERC20_ABI, this.httpProvider);
-    const bal  = await usdc.balanceOf(this.signer.address);
+    const bal = await usdc.balanceOf(this.signer.address);
     return Number(ethers.formatUnits(bal, 6));
   }
 
@@ -46,32 +46,29 @@ export class WalletManager {
   }
 
   async executeArbitrage(
-    tokenOut:       string,
-    flashAmount:    number,
-    direction:      1 | 2,
-    uniPoolFee:     number,
-    minProfitUsdc:  number
+    tokenOut: string,
+    flashAmount: number,
+    direction: 1 | 2,
+    uniPoolFee: number,
+    minProfitUsdc: number
   ): Promise<{ txHash: string; gasUsed: number }> {
     const flashAmountWei = ethers.parseUnits(flashAmount.toString(), 6);
-    const minProfitWei   = ethers.parseUnits(minProfitUsdc.toString(), 6);
+    const minProfitWei = ethers.parseUnits(minProfitUsdc.toString(), 6);
 
-    const tx = await this.contract.startArbitrage(
-      tokenOut,
-      flashAmountWei,
-      direction,
-      uniPoolFee,
-      minProfitWei,
-      {
-        gasLimit: 500_000,
-        maxFeePerGas:         ethers.parseUnits('0.1', 'gwei'),
-        maxPriorityFeePerGas: ethers.parseUnits('0.01', 'gwei'),
-      }
-    );
+    const data = this.contract.interface.encodeFunctionData('startArbitrage', [
+      tokenOut, flashAmountWei, direction, uniPoolFee, minProfitWei
+    ]);
+
+    const tx = await this.signer.sendTransaction({
+      to: CONFIG.wallet.contractAddress,
+      data: data,
+      gasLimit: 2_000_000,
+    });
 
     const receipt = await tx.wait();
     return {
-      txHash:  receipt.hash,
-      gasUsed: Number(receipt.gasUsed),
+      txHash: receipt!.hash,
+      gasUsed: Number(receipt!.gasUsed),
     };
   }
 
@@ -80,6 +77,6 @@ export class WalletManager {
   }
 
   reconnectWs(): void {
-    this.provider = new ethers.WebSocketProvider(CONFIG.chain.rpcWs);
+    this.provider = new ethers.WebSocketProvider(CONFIG.chain.rpcWs, 8453, { staticNetwork: true });
   }
 }

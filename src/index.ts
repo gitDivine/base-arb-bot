@@ -1,19 +1,21 @@
 // index.ts — Main entry point (updated for Base)
-import { CONFIG }      from './config';
+import * as dotenv from 'dotenv';
+dotenv.config();
+import { CONFIG } from './config';
 import { WalletManager } from './wallet';
-import { Scanner }     from './scanner';
-import { Executor }    from './executor';
-import { Discovery }   from './discovery';
-import { Logger }      from './logger';
+import { Scanner } from './scanner';
+import { Executor } from './executor';
+import { Discovery } from './discovery';
+import { Logger } from './logger';
 import { RateLimiter } from './rate-limiter';
 
 async function main() {
-  const logger      = new Logger();
+  const logger = new Logger();
   const rateLimiter = new RateLimiter(30, 1000);
-  const wallet      = new WalletManager();
-  const scanner     = new Scanner(wallet, logger, rateLimiter);
-  const executor    = new Executor(wallet, logger);
-  const discovery   = new Discovery(logger, rateLimiter);
+  const wallet = new WalletManager();
+  const scanner = new Scanner(wallet, logger, rateLimiter);
+  const executor = new Executor(wallet, logger);
+  const discovery = new Discovery(logger, rateLimiter);
 
   console.log('\n  ╔══════════════════════════════════════╗');
   console.log('  ║   Base Flash Loan Arbitrage Bot v1   ║');
@@ -23,13 +25,13 @@ async function main() {
   console.log('  ╚══════════════════════════════════════╝\n');
 
   // Validate config
-  if (!CONFIG.wallet.privateKey)      throw new Error('Missing PRIVATE_KEY in .env');
+  if (!CONFIG.wallet.privateKey) throw new Error('Missing PRIVATE_KEY in .env');
   if (!CONFIG.wallet.contractAddress) throw new Error('Missing CONTRACT_ADDRESS in .env');
-  if (!CONFIG.chain.rpcWs)            throw new Error('Missing BASE_WS_URL in .env');
-  if (!CONFIG.chain.rpcHttp)          throw new Error('Missing BASE_HTTP_URL in .env');
+  if (!CONFIG.chain.rpcWs) throw new Error('Missing BASE_WS_URL in .env');
+  if (!CONFIG.chain.rpcHttp) throw new Error('Missing BASE_HTTP_URL in .env');
 
   // Show wallet info
-  const ethBal  = await wallet.getEthBalance();
+  const ethBal = await wallet.getEthBalance();
   const usdcBal = await wallet.getUsdcBalance();
   logger.info('Wallet', `Address: ${wallet.signer.address.slice(0, 10)}...`);
   logger.info('Wallet', `ETH: ${ethBal.toFixed(4)} | USDC: ${usdcBal.toFixed(2)} | Mode: ${CONFIG.dryRun ? 'DRY RUN' : 'LIVE'}`);

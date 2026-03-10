@@ -53,7 +53,7 @@ contract ArbBot is IFlashLoanSimpleReceiver {
     function executeOperation(address, uint256 amount, uint256 premium, address initiator, bytes calldata params) external override returns (bool) {
         require(msg.sender == address(AAVE_POOL), "Untrusted caller");
         require(initiator == address(this), "Untrusted initiator");
-        (address tokenOut, uint8 direction, uint24 uniPoolFee, uint256 minProfitUsdc) = abi.decode(params, (address, uint8, uint24, uint256));
+        (address tokenOut, uint8 direction, uint24 uniPoolFee, ) = abi.decode(params, (address, uint8, uint24, uint256));
         uint256 repayAmount = amount + premium;
         uint256 finalUsdc;
         if (direction == BUY_UNI_SELL_AERO) {
@@ -61,7 +61,7 @@ contract ArbBot is IFlashLoanSimpleReceiver {
         } else {
             finalUsdc = _buyAeroSellUni(amount, tokenOut, uniPoolFee);
         }
-        require(finalUsdc >= repayAmount + minProfitUsdc, "Profit below minimum");
+        require(finalUsdc >= repayAmount, "Cannot repay loan");
         IERC20(USDC).approve(address(AAVE_POOL), repayAmount);
         emit ArbitrageExecuted(tokenOut, finalUsdc - repayAmount, direction);
         return true;
@@ -88,9 +88,27 @@ contract ArbBot is IFlashLoanSimpleReceiver {
     function _aeroSwap(address from, address to, uint256 amountIn) internal returns (uint256) {
         IERC20(from).approve(address(AERO), amountIn);
         IAerodromeRouter.Route[] memory routes = new IAerodromeRouter.Route[](1);
-        routes[0] = IAerodromeRouter.Route({ from: from, to: to, stable: false, factory: AERO_FACTORY });
-        uint256[] memory amounts = AERO.swapExactTokensForTokens(amountIn, 0, routes, address(this), block.timestamp + 60);
-        return amounts[amounts.length - 1];
+        
+        // Try volatile pool first (stable: false)
+        routes[0] = IAerodromeRouter.Route({ 
+            from: from, 
+            to: to, 
+            stable: false,  // Volatile pool
+            factory: AERO_FACTORY 
+        });
+        
+        try AERO.swapExactTokensForTokens(
+            amountIn, 0, routes, address(this), block.timestamp + 60
+        ) returns (uint256[] memory amounts) {
+            return amounts[amounts.length - 1];
+        } catch {
+            // Fallback: try stable pool
+            routes[0].stable = true;
+            uint256[] memory amounts = AERO.swapExactTokensForTokens(
+                amountIn, 0, routes, address(this), block.timestamp + 60
+            );
+            return amounts[amounts.length - 1];
+        }
     }
 
     function withdrawToken(address token) external onlyOwner {

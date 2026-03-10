@@ -2,19 +2,19 @@
 // BEFORE: two separate Jupiter transactions (buy then sell), real capital at risk
 // AFTER:  one atomic flash loan transaction, zero capital at risk
 
-import { CONFIG }         from './config';
+import { CONFIG } from './config';
 import { ArbOpportunity, TradeResult } from './types';
-import { Logger }         from './logger';
-import { WalletManager }  from './wallet';
+import { Logger } from './logger';
+import { WalletManager } from './wallet';
 
 export class Executor {
-  private wallet:    WalletManager;
-  private logger:    Logger;
+  private wallet: WalletManager;
+  private logger: Logger;
   private lastTrade: number = 0;
   private isTrading: boolean = false;
   private totalProfit: number = 0;
   private tradesExecuted: number = 0;
-  private tradesFailed:   number = 0;
+  private tradesFailed: number = 0;
 
   constructor(wallet: WalletManager, logger: Logger) {
     this.wallet = wallet;
@@ -22,25 +22,28 @@ export class Executor {
   }
 
   async execute(opp: ArbOpportunity): Promise<TradeResult> {
-    // Guard: prevent concurrent trades
+    console.log(`Execute called | isTrading: ${this.isTrading} | timeSinceLast: ${Date.now() - this.lastTrade}ms`);
+
+    // Guard: prevent concurrent trades synchronously before ANY await
     if (this.isTrading) {
       return { success: false, error: 'Trade already in progress' };
     }
 
-    // Guard: cooldown between trades
-    const timeSinceLast = Date.now() - this.lastTrade;
-    if (timeSinceLast < CONFIG.arb.cooldownMs) {
-      return { success: false, error: `Cooldown: ${CONFIG.arb.cooldownMs - timeSinceLast}ms remaining` };
+    // Guard: cooldown check must use the OLD lastTrade value before we lock and overwrite it
+    if (Date.now() - this.lastTrade < CONFIG.arb.cooldownMs) {
+      return { success: false, error: `Cooldown: ${CONFIG.arb.cooldownMs - (Date.now() - this.lastTrade)}ms remaining` };
     }
+
+    // Now we can safely lock the true execution
+    this.isTrading = true;
+    this.lastTrade = Date.now();
 
     // Guard: gas price check
     const gasGwei = await this.wallet.getGasPrice();
     if (gasGwei > CONFIG.arb.maxGasGwei) {
+      this.isTrading = false;
       return { success: false, error: `Gas too high: ${gasGwei.toFixed(2)} gwei (max: ${CONFIG.arb.maxGasGwei})` };
     }
-
-    this.isTrading = true;
-    this.lastTrade = Date.now();
 
     try {
       this.logger.info('Executor',
@@ -76,15 +79,7 @@ export class Executor {
 
     } catch (err: any) {
       this.tradesFailed++;
-
-      // Check if it reverted (expected — gap closed before execution)
-      const isRevert = err.message?.includes('revert') || err.message?.includes('execution reverted');
-      if (isRevert) {
-        this.logger.warn('Executor', `Trade reverted — gap closed before execution (cost: ~$0.15 gas)`);
-        return { success: false, error: 'Reverted — gap closed' };
-      }
-
-      this.logger.error('Executor', `Unexpected error: ${err.message}`);
+      this.logger.error('Executor', `Revert reason: ${err.message}`);
       return { success: false, error: err.message };
 
     } finally {
@@ -95,9 +90,9 @@ export class Executor {
   getStats() {
     return {
       tradesExecuted: this.tradesExecuted,
-      tradesFailed:   this.tradesFailed,
-      totalProfit:    this.totalProfit,
-      successRate:    this.tradesExecuted > 0
+      tradesFailed: this.tradesFailed,
+      totalProfit: this.totalProfit,
+      successRate: this.tradesExecuted > 0
         ? ((this.tradesExecuted / (this.tradesExecuted + this.tradesFailed)) * 100).toFixed(1) + '%'
         : 'N/A',
     };

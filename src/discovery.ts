@@ -1,29 +1,27 @@
 // discovery.ts — EDITED: Solana/DexScreener Solana → Base/DexScreener Base
 // Logic kept identical — only the chain filter and token source changes
 
-import axios          from 'axios';
-import { CONFIG }     from './config';
-import { TokenInfo }  from './types';
-import { Logger }     from './logger';
+import axios from 'axios';
+import { CONFIG } from './config';
+import { TokenInfo } from './types';
+import { Logger } from './logger';
 import { RateLimiter } from './rate-limiter';
 
 // Well-known Base tokens to always watch (in addition to discovered ones)
 const BASE_SEED_TOKENS = [
-  CONFIG.tokens.WETH,
-  CONFIG.tokens.cbETH,
-  CONFIG.tokens.cbBTC,
   CONFIG.tokens.DAI,
   CONFIG.tokens.AERO,
   CONFIG.tokens.BRETT,
+  CONFIG.tokens.WELL,
 ];
 
 export class Discovery {
-  private logger:      Logger;
+  private logger: Logger;
   private rateLimiter: RateLimiter;
-  private watchlist:   Map<string, TokenInfo> = new Map();
+  private watchlist: Map<string, TokenInfo> = new Map();
 
   constructor(logger: Logger, rateLimiter: RateLimiter) {
-    this.logger      = logger;
+    this.logger = logger;
     this.rateLimiter = rateLimiter;
   }
 
@@ -34,7 +32,7 @@ export class Discovery {
     for (const address of BASE_SEED_TOKENS) {
       try {
         await this.rateLimiter.throttle();
-        const res   = await axios.get(`${CONFIG.discovery.dexScreenerUrl}${address}`, { timeout: 5000 });
+        const res = await axios.get(`${CONFIG.discovery.dexScreenerUrl}${address}`, { timeout: 5000 });
         const pairs = (res.data?.pairs || []).filter((p: any) =>
           p.chainId === 'base' &&
           (p.dexId === 'uniswap' || p.dexId === 'aerodrome') &&
@@ -43,16 +41,16 @@ export class Discovery {
         );
 
         if (pairs.length >= 2) { // needs to exist on at least 2 DEXes
-          const uniPair  = pairs.find((p: any) => p.dexId === 'uniswap');
+          const uniPair = pairs.find((p: any) => p.dexId === 'uniswap');
           const aeroPair = pairs.find((p: any) => p.dexId === 'aerodrome');
 
           if (uniPair && aeroPair) {
             const info: TokenInfo = {
               address,
-              symbol:         uniPair.baseToken?.symbol || address.slice(0, 6),
+              symbol: uniPair.baseToken?.symbol || address.slice(0, 6),
               dailyVolumeUsd: parseFloat(uniPair.volume?.h24 || 0),
-              liquidityUsd:   parseFloat(uniPair.liquidity?.usd || 0),
-              uniPoolFee:     this.inferPoolFee(uniPair),
+              liquidityUsd: parseFloat(uniPair.liquidity?.usd || 0),
+              uniPoolFee: this.inferPoolFee(uniPair),
             };
             this.watchlist.set(address, info);
             added++;
