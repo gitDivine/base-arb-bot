@@ -55,13 +55,37 @@ async function main() {
 
   logger.success('Bot', `Live on Base. Listening for price gaps >= ${CONFIG.arb.minProfitBps}bps across Uniswap V3 + Aerodrome`);
 
-  // Stats every 60 seconds
-  setInterval(() => {
+  // ── Telegram startup notification ──
+  await logger.sendTelegram(
+    `🟢 Arb Bot Started\n` +
+    `⛓ Chain: Base Mainnet\n` +
+    `📋 Contract: ${CONFIG.wallet.contractAddress.slice(0, 10)}...\n` +
+    `🔋 ETH: ${ethBal.toFixed(4)}\n` +
+    `⚙️ Min gap: ${CONFIG.arb.minProfitBps}bps | Flash: $${CONFIG.arb.flashLoanAmount.toLocaleString()}\n` +
+    `${CONFIG.dryRun ? '🧪 Mode: DRY RUN' : '🔴 Mode: LIVE'}`
+  );
+
+  // Stats every 60 seconds + hourly Telegram heartbeat
+  let heartbeatTick = 0;
+  setInterval(async () => {
+    heartbeatTick++;
     const stats = executor.getStats();
     logger.info('Stats',
       `Trades: ${stats.tradesExecuted} executed / ${stats.tradesFailed} reverted | ` +
       `Success rate: ${stats.successRate} | Total profit: $${stats.totalProfit.toFixed(2)}`
     );
+
+    // 60 ticks × 60s = 1 hour
+    if (heartbeatTick % 60 === 0) {
+      const currentEth = await wallet.getEthBalance();
+      await logger.sendTelegram(
+        `💓 Arb Bot Alive\n` +
+        `⏱ Uptime: ${Math.floor(heartbeatTick / 60)}h\n` +
+        `📊 Trades: ${stats.tradesExecuted} executed / ${stats.tradesFailed} reverted\n` +
+        `💰 Profit: $${stats.totalProfit.toFixed(2)}\n` +
+        `🔋 ETH: ${currentEth.toFixed(4)}`
+      );
+    }
   }, 60_000);
 
   // Rediscover tokens every 10 minutes
