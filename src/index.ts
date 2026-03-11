@@ -8,8 +8,25 @@ import { Executor } from './executor';
 import { Discovery } from './discovery';
 import { Logger } from './logger';
 import { RateLimiter } from './rate-limiter';
+import { execSync } from 'child_process';
+
+function autoUpdate(): void {
+  try {
+    console.log('[Update] Checking for updates...');
+    const pullResult = execSync('git pull', { encoding: 'utf8', timeout: 15000 }).trim();
+    console.log(`[Update] ${pullResult}`);
+    if (pullResult !== 'Already up to date.' && pullResult !== 'Already up-to-date.') {
+      console.log('[Update] New code pulled — installing dependencies...');
+      execSync('npm install --omit=dev', { encoding: 'utf8', timeout: 30000 });
+      console.log('[Update] Dependencies updated ✓');
+    }
+  } catch (err: any) {
+    console.warn('[Update] Auto-update skipped:', err.message);
+  }
+}
 
 async function main() {
+  autoUpdate();
   const logger = new Logger();
   const rateLimiter = new RateLimiter(30, 1000);
   const wallet = new WalletManager();
