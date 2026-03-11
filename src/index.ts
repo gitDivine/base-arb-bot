@@ -89,7 +89,7 @@ async function main() {
     `🔄 Scanning live`
   );
 
-  // Stats every 60 seconds + hourly Telegram heartbeat
+  // Stats every 60 seconds + hourly heartbeat + 10-min update checks
   let heartbeatTick = 0;
   setInterval(async () => {
     heartbeatTick++;
@@ -99,7 +99,20 @@ async function main() {
       `Success rate: ${stats.successRate} | Total profit: $${stats.totalProfit.toFixed(2)}`
     );
 
-    // 60 ticks × 60s = 1 hour
+    // Every 10 ticks × 60s = 10 minutes — check for updates
+    if (heartbeatTick % 10 === 0) {
+      try {
+        const result = execSync('git pull', { encoding: 'utf8', timeout: 15000 }).trim();
+        if (result !== 'Already up to date.' && result !== 'Already up-to-date.') {
+          logger.info('Update', `New code pulled: ${result}`);
+          await logger.sendTelegram(`🔄 Update found — restarting bot...`);
+          execSync('npm install --omit=dev', { encoding: 'utf8', timeout: 30000 });
+          process.exit(0); // PM2 will auto-restart with new code
+        }
+      } catch { }
+    }
+
+    // 60 ticks × 60s = 1 hour — Telegram heartbeat
     if (heartbeatTick % 60 === 0) {
       const currentEth = await wallet.getEthBalance();
       await logger.sendTelegram(
