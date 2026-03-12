@@ -14,7 +14,6 @@ export const CONFIG = {
     USDC: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
     DAI: '0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb',
     AERO: '0x940181a94A35A4569E4529A3CDfB74e38FD98631',
-    BRETT: '0x532f27101965dd16442E59d40670FaF5eBB142E4',
     WELL: '0xA88594D404727625A9437C3f886C7643872296AE',
   },
   dexes: {
@@ -39,7 +38,6 @@ export const CONFIG = {
   scanner: {
     uniFeeTiers: [100, 500, 3000, 10000] as const,
     watchPairs: [
-      { tokenOut: '0x532f27101965dd16442E59d40670FaF5eBB142E4', fee: 3000, name: 'BRETT' },
       { tokenOut: '0x940181a94A35A4569E4529A3CDfB74e38FD98631', fee: 3000, name: 'AERO' },
     ],
     wsReconnectMs: 30000,

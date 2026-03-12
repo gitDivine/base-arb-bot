@@ -11,7 +11,6 @@ import { RateLimiter } from './rate-limiter';
 const BASE_SEED_TOKENS = [
   CONFIG.tokens.DAI,
   CONFIG.tokens.AERO,
-  CONFIG.tokens.BRETT,
   CONFIG.tokens.WELL,
 ];
 
