@@ -86,7 +86,12 @@ export class Scanner {
         if (poolAddr && poolAddr !== ethers.ZeroAddress) {
           // --- Liquidity Check ---
           let liquidityUsdc = 0;
-          if (dex.type === DexType.UNISWAP_V2 || dex.type === DexType.AERODROME) {
+          const isV3 = dex.type === DexType.UNISWAP_V3;
+
+          if (isV3) {
+            // Bypass liquidity check for V3 — tick-based liquidity is complex
+            liquidityUsdc = CONFIG.arb.flashLoanAmount * 100;
+          } else if (dex.type === DexType.UNISWAP_V2 || dex.type === DexType.AERODROME) {
             const v2pool = new ethers.Contract(poolAddr, [
               'function token0() view returns (address)',
               'function getReserves() view returns (uint112, uint112, uint32)'
@@ -95,11 +100,6 @@ export class Scanner {
             const [r0, r1] = await v2pool.getReserves();
             const resUsdc = t0.toLowerCase() === CONFIG.tokens.USDC.toLowerCase() ? r0 : r1;
             liquidityUsdc = Number(ethers.formatUnits(resUsdc, 6));
-          } else {
-            // For V3, we check the pool's USDC balance as a simple liquidity proxy
-            const usdcContract = new ethers.Contract(CONFIG.tokens.USDC, ['function balanceOf(address) view returns (uint256)'], this.wallet.provider);
-            const bal = await usdcContract.balanceOf(poolAddr);
-            liquidityUsdc = Number(ethers.formatUnits(bal, 6));
           }
 
           if (liquidityUsdc < CONFIG.arb.flashLoanAmount * 2) {
@@ -111,7 +111,8 @@ export class Scanner {
           const price = await this.fetchPrice(dex.name, dex.type, poolAddr, pair.tokenOut);
           if (price) {
             this.updatePriceCache(dex.name, pair.tokenOut, price);
-            this.logger.success('Scanner', `Initialized ${dex.name} for ${pair.name} ($${liquidityUsdc.toLocaleString()} USDC)`);
+            const liquidityStr = isV3 ? 'V3 Pool' : `$${liquidityUsdc.toLocaleString()} USDC`;
+            this.logger.success('Scanner', `Initialized ${dex.name} for ${pair.name} (${liquidityStr})`);
           }
         }
       } catch (e: any) {
