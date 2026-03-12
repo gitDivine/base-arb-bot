@@ -35,6 +35,22 @@ export class WalletManager {
     this.contract = new ethers.Contract(CONFIG.wallet.contractAddress, ARB_BOT_ABI, this.signer);
   }
 
+  async validateAndSwitchRpc(): Promise<void> {
+    try {
+      await this.httpProvider.getNetwork();
+    } catch (err: any) {
+      if (err.message.includes('429') || err.message.includes('limit exceeded') || err.message.includes('network')) {
+        const fallback = 'https://mainnet.base.org';
+        console.warn(`[Wallet] Primary RPC failed or limited. Switching to public fallback: ${fallback}`);
+        this.httpProvider = new ethers.JsonRpcProvider(fallback, 8453, { staticNetwork: true });
+        this.signer = new ethers.Wallet(CONFIG.wallet.privateKey, this.httpProvider);
+        this.contract = new ethers.Contract(CONFIG.wallet.contractAddress, ARB_BOT_ABI, this.signer);
+      } else {
+        throw err;
+      }
+    }
+  }
+
   async getUsdcBalance(): Promise<number> {
     const usdc = new ethers.Contract(CONFIG.tokens.USDC, ERC20_ABI, this.httpProvider);
     const bal = await usdc.balanceOf(this.signer.address);
