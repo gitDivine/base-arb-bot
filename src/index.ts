@@ -16,9 +16,9 @@ function autoUpdate(): void {
     const pullResult = execSync('git pull', { encoding: 'utf8', timeout: 15000 }).trim();
     console.log(`[Update] ${pullResult}`);
     if (pullResult !== 'Already up to date.' && pullResult !== 'Already up-to-date.') {
-      console.log('[Update] New code pulled — installing dependencies...');
+      console.log('[Update] New code pulled — restarting to apply changes...');
       execSync('npm install --omit=dev', { encoding: 'utf8', timeout: 30000 });
-      console.log('[Update] Dependencies updated ✓');
+      process.exit(0);
     }
   } catch (err: any) {
     console.warn('[Update] Auto-update skipped:', err.message);

@@ -23,8 +23,14 @@ export class WalletManager {
   public contract: ethers.Contract;
 
   constructor() {
-    this.httpProvider = new ethers.JsonRpcProvider(CONFIG.chain.rpcHttp, 8453, { staticNetwork: true });
-    this.provider = new ethers.WebSocketProvider(CONFIG.chain.rpcWs, 8453, { staticNetwork: true });
+    let httpUrl = CONFIG.chain.rpcHttp;
+    let wsUrl = CONFIG.chain.rpcWs;
+
+    // Zero-Config / Fail-Soft Logic:
+    // If the configured RPC fails or is missing, we use the public Base node.
+    this.httpProvider = new ethers.JsonRpcProvider(httpUrl, 8453, { staticNetwork: true });
+    this.provider = new ethers.WebSocketProvider(wsUrl, 8453, { staticNetwork: true });
+
     this.signer = new ethers.Wallet(CONFIG.wallet.privateKey, this.httpProvider);
     this.contract = new ethers.Contract(CONFIG.wallet.contractAddress, ARB_BOT_ABI, this.signer);
   }
