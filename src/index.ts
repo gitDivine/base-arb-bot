@@ -76,11 +76,11 @@ async function startBot(retryCount = 0): Promise<void> {
 
   } catch (err: any) {
     const msg = err.message || String(err);
-    if ((msg.includes('429') || msg.includes('limit exceeded')) && retryCount < 3) {
-      console.warn(`[Startup] RPC Limit hit during initialization (Attempt ${retryCount + 1}). Retrying with public fallback forced...`);
-      // Force change the config to public for this attempt
+    if ((msg.includes('429') || msg.includes('limit exceeded') || msg.includes('405')) && retryCount < 3) {
+      console.warn(`[Startup] RPC Issue detected (Attempt ${retryCount + 1}). Retrying with public fallback...`);
+      // Force change the config for this attempt
       (CONFIG.chain as any).rpcHttp = 'https://mainnet.base.org';
-      (CONFIG.chain as any).rpcWs = 'wss://mainnet.base.org/ws';
+      (CONFIG.chain as any).rpcWs = 'wss://base.publicnode.com';
       return startBot(retryCount + 1);
     }
     throw err;
