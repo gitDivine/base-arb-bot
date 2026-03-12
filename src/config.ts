@@ -8,7 +8,7 @@ export const CONFIG = {
   },
   wallet: {
     privateKey: process.env.PRIVATE_KEY || '',
-    contractAddress: process.env.CONTRACT_ADDRESS || '',
+    contractAddress: '0xbbFc8Bf808A0D1b964048B87c0787e03c97Cc341',
   },
   tokens: {
     USDC: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
