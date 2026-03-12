@@ -76,18 +76,43 @@ export class Scanner {
           poolAddr = await factory.getPool(CONFIG.tokens.USDC, pair.tokenOut, pair.fee);
         } else if (dex.type === DexType.AERODROME) {
           const factory = new ethers.Contract(dex.factory, AERO_FACTORY_ABI, this.wallet.provider);
-          poolAddr = await factory.getPool(CONFIG.tokens.USDC, pair.tokenOut, false); // Volatile
-          if (poolAddr === ethers.ZeroAddress) poolAddr = await factory.getPool(CONFIG.tokens.USDC, pair.tokenOut, true); // Stable fallback
+          poolAddr = await factory.getPool(CONFIG.tokens.USDC, pair.tokenOut, false);
+          if (poolAddr === ethers.ZeroAddress) poolAddr = await factory.getPool(CONFIG.tokens.USDC, pair.tokenOut, true);
         } else if (dex.type === DexType.UNISWAP_V2) {
           const factory = new ethers.Contract(dex.factory, UNI_V2_FACTORY_ABI, this.wallet.provider);
           poolAddr = await factory.getPair(CONFIG.tokens.USDC, pair.tokenOut);
         }
 
         if (poolAddr && poolAddr !== ethers.ZeroAddress) {
+          // --- Liquidity Check ---
+          let liquidityUsdc = 0;
+          if (dex.type === DexType.UNISWAP_V2 || dex.type === DexType.AERODROME) {
+            const v2pool = new ethers.Contract(poolAddr, [
+              'function token0() view returns (address)',
+              'function getReserves() view returns (uint112, uint112, uint32)'
+            ], this.wallet.provider);
+            const t0 = await v2pool.token0();
+            const [r0, r1] = await v2pool.getReserves();
+            const resUsdc = t0.toLowerCase() === CONFIG.tokens.USDC.toLowerCase() ? r0 : r1;
+            liquidityUsdc = Number(ethers.formatUnits(resUsdc, 6));
+          } else {
+            // For V3, we check the pool's USDC balance as a simple liquidity proxy
+            const usdcContract = new ethers.Contract(CONFIG.tokens.USDC, ['function balanceOf(address) view returns (uint256)'], this.wallet.provider);
+            const bal = await usdcContract.balanceOf(poolAddr);
+            liquidityUsdc = Number(ethers.formatUnits(bal, 6));
+          }
+
+          if (liquidityUsdc < CONFIG.arb.flashLoanAmount * 2) {
+            this.logger.warn('Scanner', `Skipping ${dex.name} for ${pair.name}: Insufficient liquidity ($${liquidityUsdc.toLocaleString()} USDC)`);
+            continue;
+          }
+
           this.setupPoolSubscription(dex.name, dex.type, poolAddr, pair);
-          // Initial price fetch
           const price = await this.fetchPrice(dex.name, dex.type, poolAddr, pair.tokenOut);
-          if (price) this.updatePriceCache(dex.name, pair.tokenOut, price);
+          if (price) {
+            this.updatePriceCache(dex.name, pair.tokenOut, price);
+            this.logger.success('Scanner', `Initialized ${dex.name} for ${pair.name} ($${liquidityUsdc.toLocaleString()} USDC)`);
+          }
         }
       } catch (e: any) {
         this.logger.warn('Scanner', `Failed to init ${dex.name} for ${pair.name}: ${e.message}`);
@@ -158,6 +183,9 @@ export class Scanner {
     if (bestGap > 500) return; // Skip outlier
 
     if (netGap >= CONFIG.arb.minProfitBps) {
+      // Liquidity Guard: Check if flash amount is too large for the pool (V2 only check for now)
+      // We can estimate this if we have reserves in cache, but for now lets focus on the price fix first.
+
       this.logger.info('Scanner', `Found potential gap: ${pair.name} | ${buyDex} → ${sellDex} | ${netGap.toFixed(1)}bps`);
 
       const leg1 = this.buildSwapLeg(buyDex, pair.tokenOut, pair.fee);
