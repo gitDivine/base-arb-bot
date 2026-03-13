@@ -16,33 +16,17 @@ const ERC20_ABI = [
   'function decimals() view returns (uint8)',
 ];
 
-export class WalletManager {
-  public provider: ethers.WebSocketProvider;
-  private httpProvider: ethers.JsonRpcProvider;
-  public signer: ethers.Wallet;
-  public contract: ethers.Contract;
+const PUBLIC_HTTP_FALLBACKS = [
+  'https://mainnet.base.org',
+  'https://base.publicnode.com',
+  'https://1rpc.io/base'
+];
 
-  constructor() {
-    // Only initialize the HTTP provider (lazy-ish)
-    this.httpProvider = new ethers.JsonRpcProvider(CONFIG.chain.rpcHttp, 8453, { staticNetwork: true });
-    this.signer = new ethers.Wallet(CONFIG.wallet.privateKey, this.httpProvider);
-    this.contract = new ethers.Contract(CONFIG.wallet.contractAddress, ARB_BOT_ABI, this.signer);
-
-    // Initialize provider as null; it will be set in validateAndSwitchRpc after verification
-    this.provider = null as any;
-  }
-
-  const PUBLIC_HTTP_FALLBACKS = [
-    'https://mainnet.base.org',
-    'https://base.publicnode.com',
-    'https://1rpc.io/base'
-  ];
-
-  const PUBLIC_WS_FALLBACKS = [
-    'wss://base.publicnode.com',
-    'wss://mainnet.base.org/ws',
-    'wss://base.drpc.org'
-  ];
+const PUBLIC_WS_FALLBACKS = [
+  'wss://base.publicnode.com',
+  'wss://mainnet.base.org/ws',
+  'wss://base.drpc.org'
+];
 
 export class WalletManager {
   public provider: ethers.WebSocketProvider;
@@ -53,6 +37,7 @@ export class WalletManager {
   private workingHttp: string = CONFIG.chain.rpcHttp;
 
   constructor() {
+    // Initial dummy providers that will be swapped in validateAndSwitchRpc
     this.httpProvider = new ethers.JsonRpcProvider(CONFIG.chain.rpcHttp, 8453, { staticNetwork: true });
     this.signer = new ethers.Wallet(CONFIG.wallet.privateKey, this.httpProvider);
     this.contract = new ethers.Contract(CONFIG.wallet.contractAddress, ARB_BOT_ABI, this.signer);
@@ -112,6 +97,7 @@ export class WalletManager {
       }
     }
 
+    // Re-init signer and contract
     this.signer = new ethers.Wallet(CONFIG.wallet.privateKey, this.httpProvider);
     this.contract = new ethers.Contract(CONFIG.wallet.contractAddress, ARB_BOT_ABI, this.signer);
     console.log(`[Wallet] RPC initialization complete ✓`);
