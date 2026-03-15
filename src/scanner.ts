@@ -14,6 +14,9 @@ const UNI_V3_POOL_ABI = [
 ];
 const UNI_V3_FACTORY_ABI = ['function getPool(address tokenA, address tokenB, uint24 fee) view returns (address pool)'];
 const UNI_V3_QUOTER_ABI = ['function quoteExactInputSingle(address tokenIn, address tokenOut, uint24 fee, uint256 amountIn, uint160 sqrtPriceLimitX96) external returns (uint256 amountOut)'];
+const UNI_V3_QUOTER_V2_ABI = [
+  'function quoteExactInputSingle((address tokenIn, address tokenOut, uint256 amountIn, uint24 fee, uint160 sqrtPriceLimitX96) params) external returns (uint256 amountOut, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate)'
+];
 
 const AERO_POOL_ABI = ['event Swap(address indexed sender, address indexed to, uint256 amount0In, uint256 amount1In, uint256 amount0Out, uint256 amount1Out)'];
 const AERO_FACTORY_ABI = ['function getPool(address tokenA, address tokenB, bool stable) external view returns (address pool)'];
@@ -187,25 +190,40 @@ export class Scanner {
       // Liquidity Guard: Check if flash amount is too large for the pool (V2 only check for now)
       // We can estimate this if we have reserves in cache, but for now lets focus on the price fix first.
 
-      this.logger.info('Scanner', `Found potential gap: ${pair.name} | ${buyDex} → ${sellDex} | ${netGap.toFixed(1)}bps`);
+      this.logger.info('Scanner', `Ratio Gap: ${pair.name} | ${buyDex} → ${sellDex} | ${netGap.toFixed(1)}bps. Verifying on-chain...`);
 
-      const leg1 = this.buildSwapLeg(buyDex, pair.tokenOut, pair.fee);
-      const leg2 = this.buildSwapLeg(sellDex, pair.tokenOut, pair.fee);
+      const quote1 = await this.getOnChainQuote(buyDex, CONFIG.tokens.USDC, pair.tokenOut, CONFIG.arb.flashLoanAmount, pair.fee);
+      if (!quote1) return;
 
-      const opportunity: ArbOpportunity = {
-        tokenOut: pair.tokenOut,
-        tokenName: pair.name,
-        leg1,
-        leg2,
-        gapBps: Math.round(netGap),
-        flashAmount: CONFIG.arb.flashLoanAmount,
-        estimatedProfit: (CONFIG.arb.flashLoanAmount * (netGap / 10000)),
-        timestamp: Date.now()
-      };
+      const quote2 = await this.getOnChainQuote(sellDex, pair.tokenOut, CONFIG.tokens.USDC, quote1, pair.fee);
+      if (!quote2) return;
 
-      this.hitsToday++;
-      this.logger.opportunity(opportunity);
-      this.opportunityCallback?.(opportunity);
+      const realProfit = Number(ethers.formatUnits(quote2, 6)) - CONFIG.arb.flashLoanAmount;
+      const realGapBps = (realProfit / CONFIG.arb.flashLoanAmount) * 10000;
+
+      if (realProfit >= CONFIG.arb.minProfitUsdc) {
+        this.logger.success('Scanner', `✅ Profitable Quote: $${realProfit.toFixed(2)} (${realGapBps.toFixed(1)}bps)`);
+
+        const leg1 = this.buildSwapLeg(buyDex, pair.tokenOut, pair.fee);
+        const leg2 = this.buildSwapLeg(sellDex, pair.tokenOut, pair.fee);
+
+        const opportunity: ArbOpportunity = {
+          tokenOut: pair.tokenOut,
+          tokenName: pair.name,
+          leg1,
+          leg2,
+          gapBps: Math.round(realGapBps),
+          flashAmount: CONFIG.arb.flashLoanAmount,
+          estimatedProfit: realProfit,
+          timestamp: Date.now()
+        };
+
+        this.hitsToday++;
+        this.logger.opportunity(opportunity);
+        this.opportunityCallback?.(opportunity);
+      } else {
+        this.logger.warn('Scanner', `❌ Phantom Gap: Ratio indicated $${(CONFIG.arb.flashLoanAmount * (netGap / 10000)).toFixed(2)}, but Quoter says $${realProfit.toFixed(2)}`);
+      }
     }
   }
 
@@ -242,6 +260,46 @@ export class Scanner {
     if (dexName.includes('V3')) return 30; // 0.3% default
     if (dexName === 'aerodrome') return 20; // 0.2% volatile
     return 30; // V2 default
+  }
+
+  private async getOnChainQuote(dexName: string, tokenIn: string, tokenOut: string, amountIn: bigint | number, fee: number): Promise<bigint | null> {
+    try {
+      const amountInBig = typeof amountIn === 'bigint' ? amountIn : ethers.parseUnits(amountIn.toString(), tokenIn === CONFIG.tokens.USDC ? 6 : (DECIMALS_CACHE.get(tokenIn) || 18));
+      
+      if (dexName.includes('uniswapV3') || dexName.includes('pancakeV3')) {
+        const quoter = new ethers.Contract(CONFIG.dexes.uniswapV3QuoterV2, UNI_V3_QUOTER_V2_ABI, this.wallet.provider);
+        const params = {
+          tokenIn,
+          tokenOut,
+          amountIn: amountInBig,
+          fee,
+          sqrtPriceLimitX96: 0
+        };
+        const quote = await quoter.quoteExactInputSingle.staticCall(params);
+        return quote.amountOut;
+      } 
+      else if (dexName === 'aerodrome') {
+        const router = new ethers.Contract(CONFIG.dexes.aerodromeRouter, AERO_ROUTER_ABI, this.wallet.provider);
+        const routes = [{
+          from: tokenIn,
+          to: tokenOut,
+          stable: false,
+          factory: CONFIG.dexes.aerodromeFactory
+        }];
+        const amounts = await router.getAmountsOut(amountInBig, routes);
+        return amounts[amounts.length - 1];
+      }
+      else { // V2 fallback using getAmountsOut
+        const config = (CONFIG.dexes as any);
+        const routerAddr = config[`${dexName}Router`];
+        const router = new ethers.Contract(routerAddr, ['function getAmountsOut(uint256 amountIn, address[] path) view returns (uint256[] amounts)'], this.wallet.provider);
+        const amounts = await router.getAmountsOut(amountInBig, [tokenIn, tokenOut]);
+        return amounts[amounts.length - 1];
+      }
+    } catch (e: any) {
+      this.logger.debug('Scanner', `Quote failed for ${dexName}: ${e.message}`);
+      return null;
+    }
   }
 
   private async fetchPrice(dexName: string, type: DexType, poolAddr: string, tokenOut: string): Promise<number | null> {
