@@ -28,7 +28,8 @@ export class Logger {
   private getDexName(type: DexType): string {
     switch (type) {
       case DexType.UNISWAP_V3: return 'UniV3';
-      case DexType.AERODROME: return 'Aero';
+      case DexType.ALGEBRA: return 'Algebra';
+      case DexType.SOLIDLY: return 'Solidly';
       case DexType.UNISWAP_V2: return 'V2';
       default: return 'DEX';
     }
