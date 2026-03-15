@@ -36,7 +36,7 @@ export const CONFIG = {
     flashFee: 0.0005,
   },
   arb: {
-    minProfitBps: 60,
+    minProfitBps: 20,
     minProfitUsdc: 2,
     flashLoanAmount: 30000,
     slippageBps: 15,
