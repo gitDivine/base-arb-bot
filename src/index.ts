@@ -92,6 +92,10 @@ async function startBot(retryCount = 0): Promise<void> {
 
 async function main() {
   autoUpdate();
+  // 10-minute auto-update checks
+  setInterval(() => {
+    autoUpdate();
+  }, 600_000);
   await startBot();
 }
 
