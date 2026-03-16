@@ -5,8 +5,8 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "start": "ts-node src/index.ts",
-    "dev": "ts-node --watch src/index.ts",
+    "start": "ts-node --transpile-only src/index.ts",
+    "dev": "ts-node --transpile-only --watch src/index.ts",
     "deploy": "ts-node scripts/deploy.ts"
   },
   "dependencies": {
