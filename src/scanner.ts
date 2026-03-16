@@ -12,7 +12,10 @@ const UNI_V3_POOL_ABI = [
   'function token0() view returns (address)',
   'function token1() view returns (address)',
 ];
-const UNI_V3_FACTORY_ABI = ['function getPool(address tokenA, address tokenB, uint24 fee) view returns (address pool)'];
+const UNI_V3_FACTORY_ABI = [
+  'function getPool(address tokenA, address tokenB, uint24 fee) view returns (address pool)',
+  'function poolByPair(address tokenA, address tokenB) view returns (address pool)'
+];
 const UNI_V3_QUOTER_ABI = ['function quoteExactInputSingle(address tokenIn, address tokenOut, uint24 fee, uint256 amountIn, uint160 sqrtPriceLimitX96) external returns (uint256 amountOut)'];
 const UNI_V3_QUOTER_V2_ABI = [
   'function quoteExactInputSingle((address tokenIn, address tokenOut, uint256 amountIn, uint24 fee, uint160 sqrtPriceLimitX96) params) external returns (uint256 amountOut, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate)'
@@ -86,9 +89,14 @@ export class Scanner {
         let poolAddr = ethers.ZeroAddress;
         if (dex.type === DexType.UNISWAP_V3 || dex.type === DexType.ALGEBRA) {
           const factory = new ethers.Contract(dex.factory, UNI_V3_FACTORY_ABI, this.wallet.provider);
-          poolAddr = await factory.getPool(CONFIG.tokens.USDC, pair.tokenOut, pair.fee);
+          if (dex.type === DexType.ALGEBRA) {
+            poolAddr = await factory.poolByPair(CONFIG.tokens.USDC, pair.tokenOut);
+          } else {
+            poolAddr = await factory.getPool(CONFIG.tokens.USDC, pair.tokenOut, pair.fee);
+          }
         } else if (dex.type === DexType.SOLIDLY) {
           const factory = new ethers.Contract(dex.factory, AERO_FACTORY_ABI, this.wallet.provider);
+          // Ramses on Arbitrum/Aero on Base both use getPool(a,b,stable)
           poolAddr = await factory.getPool(CONFIG.tokens.USDC, pair.tokenOut, false);
           if (poolAddr === ethers.ZeroAddress) poolAddr = await factory.getPool(CONFIG.tokens.USDC, pair.tokenOut, true);
         } else if (dex.type === DexType.UNISWAP_V2) {
@@ -203,10 +211,16 @@ export class Scanner {
       this.logger.info('Scanner', `Ratio Gap: ${pair.name} | ${buyDex} → ${sellDex} | ${netGap.toFixed(1)}bps. Verifying on-chain...`);
 
       const quote1 = await this.getOnChainQuote(buyDex, CONFIG.tokens.USDC, pair.tokenOut, CONFIG.arb.flashLoanAmount, pair.fee);
-      if (!quote1) return;
+      if (!quote1) {
+        this.logger.warn('Scanner', `❌ Verification Failed: No quote for ${buyDex}`);
+        return;
+      }
 
       const quote2 = await this.getOnChainQuote(sellDex, pair.tokenOut, CONFIG.tokens.USDC, quote1, pair.fee);
-      if (!quote2) return;
+      if (!quote2) {
+        this.logger.warn('Scanner', `❌ Verification Failed: No quote for ${sellDex}`);
+        return;
+      }
 
       const realProfit = Number(ethers.formatUnits(quote2, 6)) - CONFIG.arb.flashLoanAmount;
       const realGapBps = (realProfit / CONFIG.arb.flashLoanAmount) * 10000;
@@ -276,13 +290,13 @@ export class Scanner {
     try {
       const amountInBig = typeof amountIn === 'bigint' ? amountIn : ethers.parseUnits(amountIn.toString(), tokenIn === CONFIG.tokens.USDC ? 6 : (DECIMALS_CACHE.get(tokenIn) || 18));
       
-      if (dexName.includes('V3') || (dexName.includes('camelot') && CONFIG.chain.chainId === 42161)) {
+      if (dexName.includes('V3') || (dexName.includes('camelot') && CONFIG.chain.chainId === 42161) || (dexName.includes('ramses') && CONFIG.chain.chainId === 42161)) {
         const quoter = new ethers.Contract(CONFIG.dexes.uniswapV3QuoterV2, UNI_V3_QUOTER_V2_ABI, this.wallet.provider);
         const params = {
           tokenIn,
           tokenOut,
           amountIn: amountInBig,
-          fee,
+          fee: fee,
           sqrtPriceLimitX96: 0
         };
         const quote = await quoter.quoteExactInputSingle.staticCall(params);
