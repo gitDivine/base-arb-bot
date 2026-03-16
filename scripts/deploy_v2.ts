@@ -70,8 +70,26 @@ async function main() {
     const address = await contract.getAddress();
     console.log(`✅ Deployed at: ${address}`);
 
-    // 3. Log results for .env (Manual update recommended for multi-chain)
-    console.log(`\nAdd this to your .env or Bots Manager config:`);
+    // 3. Auto-update local .env
+    try {
+        const envPath = path.resolve(__dirname, '..', '.env');
+        if (fs.existsSync(envPath)) {
+            let envContent = fs.readFileSync(envPath, 'utf8');
+            if (envContent.includes('CONTRACT_ADDRESS=')) {
+                envContent = envContent.replace(/CONTRACT_ADDRESS=.*/, `CONTRACT_ADDRESS=${address}`);
+            } else {
+                envContent += `\nCONTRACT_ADDRESS=${address}\n`;
+            }
+            fs.writeFileSync(envPath, envContent);
+            console.log('✅ Local .env automatically updated with CONTRACT_ADDRESS.');
+        } else {
+            console.warn('⚠️ .env file not found, skipping auto-update.');
+        }
+    } catch (e: any) {
+        console.warn(`⚠️ Could not auto-update .env: ${e.message}`);
+    }
+
+    console.log(`\nNext Step: Add this address to your Bots Manager config if you haven't yet:`);
     console.log(`${ACTIVE.name.toUpperCase()}_CONTRACT_ADDRESS=${address}`);
 }
 
