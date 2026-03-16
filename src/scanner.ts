@@ -22,7 +22,10 @@ const UNI_V3_QUOTER_V2_ABI = [
 ];
 
 const AERO_POOL_ABI = ['event Swap(address indexed sender, address indexed to, uint256 amount0In, uint256 amount1In, uint256 amount0Out, uint256 amount1Out)'];
-const AERO_FACTORY_ABI = ['function getPool(address tokenA, address tokenB, bool stable) external view returns (address pool)'];
+const AERO_FACTORY_ABI = [
+  'function getPool(address tokenA, address tokenB, bool stable) external view returns (address pool)',
+  'function getPair(address tokenA, address tokenB, bool stable) external view returns (address pair)'
+];
 const AERO_ROUTER_ABI = ['function getAmountsOut(uint256 amountIn, tuple(address from, address to, bool stable, address factory)[] routes) view returns (uint256[] amounts)'];
 
 const UNI_V2_POOL_ABI = ['event Swap(address indexed sender, uint amount0In, uint amount1In, uint amount0Out, uint amount1Out, address indexed to)', 'function getReserves() view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)'];
@@ -96,9 +99,14 @@ export class Scanner {
           }
         } else if (dex.type === DexType.SOLIDLY) {
           const factory = new ethers.Contract(dex.factory, AERO_FACTORY_ABI, this.wallet.provider);
-          // Ramses on Arbitrum/Aero on Base both use getPool(a,b,stable)
-          poolAddr = await factory.getPool(CONFIG.tokens.USDC, pair.tokenOut, false);
-          if (poolAddr === ethers.ZeroAddress) poolAddr = await factory.getPool(CONFIG.tokens.USDC, pair.tokenOut, true);
+          try {
+            poolAddr = await factory.getPool(CONFIG.tokens.USDC, pair.tokenOut, false);
+            if (poolAddr === ethers.ZeroAddress) poolAddr = await factory.getPool(CONFIG.tokens.USDC, pair.tokenOut, true);
+          } catch {
+            // Fallback for Ramses V1/V2 (Solidly) which uses getPair
+            poolAddr = await factory.getPair(CONFIG.tokens.USDC, pair.tokenOut, false);
+            if (poolAddr === ethers.ZeroAddress) poolAddr = await factory.getPair(CONFIG.tokens.USDC, pair.tokenOut, true);
+          }
         } else if (dex.type === DexType.UNISWAP_V2) {
           const factory = new ethers.Contract(dex.factory, UNI_V2_FACTORY_ABI, this.wallet.provider);
           poolAddr = await factory.getPair(CONFIG.tokens.USDC, pair.tokenOut);
