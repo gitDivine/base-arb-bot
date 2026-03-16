@@ -38,6 +38,9 @@ async function startBot(retryCount = 0): Promise<void> {
 
   console.log('[Startup] Validating RPC connections...');
   try {
+    if (!CONFIG.wallet.contractAddress || CONFIG.wallet.contractAddress === ethers.ZeroAddress) {
+      throw new Error('CONTRACT_ADDRESS is missing in .env! Please deploy your contract or add the address.');
+    }
     await wallet.validateAndSwitchRpc();
 
     console.log('[Startup] Initializing Scanner, Executor, and Discovery...');
