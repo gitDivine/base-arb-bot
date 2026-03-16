@@ -1,6 +1,7 @@
 // index.ts — Main entry point (updated for Base)
 import * as dotenv from 'dotenv';
 dotenv.config();
+import { ethers } from 'ethers';
 import { CONFIG } from './config';
 import { WalletManager } from './wallet';
 import { Scanner } from './scanner';
