@@ -93,7 +93,11 @@ export class Scanner {
         if (dex.type === DexType.UNISWAP_V3 || dex.type === DexType.ALGEBRA) {
           const factory = new ethers.Contract(dex.factory, UNI_V3_FACTORY_ABI, this.wallet.provider);
           if (dex.type === DexType.ALGEBRA) {
-            poolAddr = await factory.poolByPair(CONFIG.tokens.USDC, pair.tokenOut);
+            try {
+              poolAddr = await factory.poolByPair(CONFIG.tokens.USDC, pair.tokenOut);
+            } catch {
+              poolAddr = await factory.getPool(CONFIG.tokens.USDC, pair.tokenOut, pair.fee);
+            }
           } else {
             poolAddr = await factory.getPool(CONFIG.tokens.USDC, pair.tokenOut, pair.fee);
           }

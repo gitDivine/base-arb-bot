@@ -54,7 +54,7 @@ const CONFIG_BY_CHAIN: any = {
       camelotV3Router: addr('0x1F721E64571A24194602120BCec23E6db1426442'),
       camelotV3Factory: addr('0x1a3c1bdCc53784789C13374464c53E5B19d6Cba4'),
       ramsesRouter: addr('0xAAA87963EFe74394b91747FA733E3917d68180E7'),
-      ramsesFactory: addr('0xFf7CC3Ca8ed1286591BE82f56EC347083D617721'),
+      ramsesFactory: addr('0x07E60782535752be279929e2DFfDd136Db2e6b45'), // Ramses V3 (CL)
     },
     aave: {
       pool: addr('0x794a61358D6845594F94dc1DB02A252b5b4814aD'),
