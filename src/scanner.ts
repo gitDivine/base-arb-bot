@@ -79,9 +79,9 @@ export class Scanner {
         const routerInfo = (CONFIG.dexes as any)[`${baseName}Router`];
         
         let type = DexType.UNISWAP_V2;
-        if (factoryInfo.dexType === 'uniswapV3') type = DexType.UNISWAP_V3;
+        if (factoryInfo.dexType === 'uniswapV3' || factoryInfo.dexType === 'ramses') type = DexType.UNISWAP_V3;
         else if (factoryInfo.dexType === 'camelotV3') type = DexType.ALGEBRA;
-        else if (factoryInfo.dexType === 'aerodrome' || factoryInfo.dexType === 'ramses') type = DexType.SOLIDLY;
+        else if (factoryInfo.dexType === 'aerodrome') type = DexType.SOLIDLY;
 
         dexConfigs.push({
           name: baseName,
@@ -97,14 +97,23 @@ export class Scanner {
         let poolAddr = ethers.ZeroAddress;
         if (dex.type === DexType.UNISWAP_V3 || dex.type === DexType.ALGEBRA) {
           const factory = new ethers.Contract(dex.factory, UNI_V3_FACTORY_ABI, this.wallet.provider);
-          if (dex.type === DexType.ALGEBRA) {
-            try {
-              poolAddr = await factory.poolByPair(CONFIG.tokens.USDC, pair.tokenOut);
-            } catch {
-              poolAddr = await factory.getPool(CONFIG.tokens.USDC, pair.tokenOut, pair.fee);
+          
+          // Try both Native USDC and USDC.e on Arbitrum
+          const usdcVariants = CONFIG.chain.chainId === 42161 
+            ? [CONFIG.tokens.USDC, '0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8'] 
+            : [CONFIG.tokens.USDC];
+
+          for (const usdc of usdcVariants) {
+            if (dex.type === DexType.ALGEBRA) {
+              try {
+                poolAddr = await factory.poolByPair(usdc, pair.tokenOut);
+              } catch {
+                poolAddr = await factory.getPool(usdc, pair.tokenOut, pair.fee);
+              }
+            } else {
+              poolAddr = await factory.getPool(usdc, pair.tokenOut, pair.fee);
             }
-          } else {
-            poolAddr = await factory.getPool(CONFIG.tokens.USDC, pair.tokenOut, pair.fee);
+            if (poolAddr && poolAddr !== ethers.ZeroAddress) break;
           }
         } else if (dex.type === DexType.SOLIDLY) {
           const factory = new ethers.Contract(dex.factory, AERO_FACTORY_ABI, this.wallet.provider);
