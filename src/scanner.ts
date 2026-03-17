@@ -50,6 +50,13 @@ export class Scanner {
     this.wallet = wallet;
     this.logger = logger;
     this.rateLimiter = rateLimiter;
+
+    // Heartbeat every 60 seconds
+    setInterval(() => {
+      if (this.poolContracts.size > 0) {
+        this.logger.info('Scanner', `Heartbeat: Active monitoring of ${this.poolContracts.size} pools ✓`);
+      }
+    }, 60000);
   }
 
   onOpportunity(cb: (opp: ArbOpportunity) => void): void {
@@ -136,9 +143,12 @@ export class Scanner {
         }
 
         if (poolAddr && poolAddr !== ethers.ZeroAddress) {
+          const isV3 = dex.type === DexType.UNISWAP_V3 || dex.type === DexType.ALGEBRA;
+          const typeLabel = isV3 ? (dex.type === DexType.ALGEBRA ? 'Algebra' : 'V3 Pool') : 'V2/Solidly';
+          this.logger.info('Scanner', `Initialized ${dex.name} for ${pair.name} (${typeLabel})`);
+          
           // --- Liquidity Check ---
           let liquidityUsdc = 0;
-          const isV3 = dex.type === DexType.UNISWAP_V3 || dex.type === DexType.ALGEBRA;
 
           if (isV3) {
             // Bypass liquidity check for V3 — tick-based liquidity is complex
