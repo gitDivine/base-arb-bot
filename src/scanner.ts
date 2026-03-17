@@ -44,6 +44,8 @@ export class Scanner {
   private opportunityCallback?: (opp: ArbOpportunity) => void;
   private poolContracts: Map<string, ethers.Contract> = new Map();
   private cycleCount = 0;
+  private highestGapSeen = 0;
+  private lastReportTime = Date.now();
   private hitsToday = 0;
 
   constructor(wallet: WalletManager, logger: Logger, rateLimiter: RateLimiter) {
@@ -241,6 +243,18 @@ export class Scanner {
     const bestGap = Math.max(gap1to2, gap2to1);
     const buyDex = gap1to2 > gap2to1 ? surface.dex1 : surface.dex2;
     const sellDex = gap1to2 > gap2to1 ? surface.dex2 : surface.dex1;
+
+    // Diagnostic tracking
+    if (bestGap > this.highestGapSeen) this.highestGapSeen = bestGap;
+    
+    // Cyclical Report every 500 checks or 5 mins
+    if (this.cycleCount % 500 === 0 || (Date.now() - this.lastReportTime > 300000)) {
+      if (this.highestGapSeen > 0) {
+        this.logger.info('Scanner', `Performance Report: High Gap seen in last period: ${this.highestGapSeen.toFixed(1)}bps (Cycles: ${this.cycleCount})`);
+        this.highestGapSeen = 0;
+        this.lastReportTime = Date.now();
+      }
+    }
 
     // Estimate net gap (fees)
     const fee1 = this.getDexFeeBps(buyDex);

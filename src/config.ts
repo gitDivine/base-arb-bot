@@ -88,12 +88,10 @@ export const CONFIG = {
   dexes: ACTIVE_CONFIG.dexes,
   aave: ACTIVE_CONFIG.aave,
   arb: {
-    minProfitBps: 20,
-    minProfitUsdc: 2,
-    flashLoanAmount: 30000,
-    slippageBps: 15,
-    maxGasGwei: 10,
-    cooldownMs: 2000,
+    flashLoanAmount: 100, // $100 USDC
+    minProfitUsdc: 0.1,  // $0.10 net profit
+    minProfitBps: 12.0,   // 12bps gap
+    flashFee: 0.0005,
   },
   scanner: {
     uniFeeTiers: [100, 500, 3000, 10000] as const,
