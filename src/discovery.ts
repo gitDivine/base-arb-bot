@@ -21,33 +21,33 @@ export class Discovery {
   }
 
   async run(): Promise<TokenInfo[]> {
-    this.logger.info('Discovery', `Scanning ${CONFIG.chain.name} tokens via DexScreener...`);
-    let added = 0;
+    const chainName = CONFIG.chain.chainId === 42161 ? 'arbitrum' : 'base';
+    const primaryDex = chainName === 'arbitrum' ? 'uniswap' : 'uniswap';
+    const secondaryDexes = chainName === 'arbitrum' ? ['camelot', 'ramses'] : ['aerodrome'];
 
     for (const address of SEED_TOKENS) {
       try {
         await this.rateLimiter.throttle();
         const res = await axios.get(`${CONFIG.discovery.dexScreenerUrl}${address}`, { timeout: 5000 });
-        const chainName = CONFIG.chain.chainId === 42161 ? 'arbitrum' : 'base';
         
         const pairs = (res.data?.pairs || []).filter((p: any) =>
           p.chainId === chainName &&
-          (p.dexId === 'uniswap' || p.dexId === 'aerodrome' || p.dexId === 'camelot-v3' || p.dexId === 'ramses-v2') &&
+          (p.dexId === 'uniswap' || p.dexId === 'aerodrome' || p.dexId === 'camelot' || p.dexId === 'ramses') &&
           parseFloat(p.volume?.h24 || 0) >= CONFIG.discovery.minDailyVolumeUsd &&
           parseFloat(p.liquidity?.usd || 0) >= CONFIG.discovery.minLiquidityUsd
         );
 
-        if (pairs.length >= 2) { // needs to exist on at least 2 DEXes
-          const uniPair = pairs.find((p: any) => p.dexId === 'uniswap');
-          const aeroPair = pairs.find((p: any) => p.dexId === 'aerodrome');
+        if (pairs.length >= 2) {
+          const mainPair = pairs.find((p: any) => p.dexId === primaryDex);
+          const sidePair = pairs.find((p: any) => secondaryDexes.includes(p.dexId));
 
-          if (uniPair && aeroPair) {
+          if (mainPair && sidePair) {
             const info: TokenInfo = {
               address,
-              symbol: uniPair.baseToken?.symbol || address.slice(0, 6),
-              dailyVolumeUsd: parseFloat(uniPair.volume?.h24 || 0),
-              liquidityUsd: parseFloat(uniPair.liquidity?.usd || 0),
-              uniPoolFee: this.inferPoolFee(uniPair),
+              symbol: mainPair.baseToken?.symbol || address.slice(0, 6),
+              dailyVolumeUsd: parseFloat(mainPair.volume?.h24 || 0),
+              liquidityUsd: parseFloat(mainPair.liquidity?.usd || 0),
+              uniPoolFee: this.inferPoolFee(mainPair),
             };
             this.watchlist.set(address, info);
             added++;

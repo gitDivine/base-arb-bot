@@ -98,20 +98,25 @@ export class Scanner {
         if (dex.type === DexType.UNISWAP_V3 || dex.type === DexType.ALGEBRA) {
           const factory = new ethers.Contract(dex.factory, UNI_V3_FACTORY_ABI, this.wallet.provider);
           
-          // Try both Native USDC and USDC.e on Arbitrum
           const usdcVariants = CONFIG.chain.chainId === 42161 
             ? [CONFIG.tokens.USDC, '0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8'] 
             : [CONFIG.tokens.USDC];
 
+          const feesToTry = [pair.fee, 500, 3000, 100, 10000];
+
           for (const usdc of usdcVariants) {
-            if (dex.type === DexType.ALGEBRA) {
+            // Priority 1: Algebra poolByPair (Camelot/Ramses CL often use this)
+            try {
+              poolAddr = await factory.poolByPair(usdc, pair.tokenOut);
+              if (poolAddr && poolAddr !== ethers.ZeroAddress) break;
+            } catch {}
+
+            // Priority 2: Standard getPool with multiple fee tiers
+            for (const fee of feesToTry) {
               try {
-                poolAddr = await factory.poolByPair(usdc, pair.tokenOut);
-              } catch {
-                poolAddr = await factory.getPool(usdc, pair.tokenOut, pair.fee);
-              }
-            } else {
-              poolAddr = await factory.getPool(usdc, pair.tokenOut, pair.fee);
+                poolAddr = await factory.getPool(usdc, pair.tokenOut, fee);
+                if (poolAddr && poolAddr !== ethers.ZeroAddress) break;
+              } catch {}
             }
             if (poolAddr && poolAddr !== ethers.ZeroAddress) break;
           }
