@@ -21,6 +21,8 @@ export class Discovery {
   }
 
   async run(): Promise<TokenInfo[]> {
+    this.logger.info('Discovery', `Scanning ${CONFIG.chain.name} tokens via DexScreener...`);
+    let added = 0;
     const chainName = CONFIG.chain.chainId === 42161 ? 'arbitrum' : 'base';
     const primaryDex = chainName === 'arbitrum' ? 'uniswap' : 'uniswap';
     const secondaryDexes = chainName === 'arbitrum' ? ['camelot', 'ramses'] : ['aerodrome'];
