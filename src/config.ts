@@ -17,11 +17,11 @@ const CONFIG_BY_CHAIN: any = {
       WELL: addr('0xA88594D404727625A9437C3f886C7643872296AE'),
     },
     dexes: {
-      uniswapV3Router: addr('0x2626664c2603336E57B271c5C0b26F421741e481'),
-      uniswapV3Factory: addr('0x33128a8fC17869897dcE68Ed026d694621f6FDfD'),
-      uniswapV3QuoterV2: addr('0xB048Bbc1Ee6b733FFfCFb9e9CeF7375518e25997'),
-      aerodromeRouter: addr('0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43'),
-      aerodromeFactory: addr('0x420DD381b31aEf6683db6B902084cB0FFECe40Da'),
+      uniswapV3Router: { address: addr('0x2626664c2603336E57B271c5C0b26F421741e481'), dexType: 'uniswapV3' },
+      uniswapV3Factory: { address: addr('0x33128a8fC17869897dcE68Ed026d694621f6FDfD'), dexType: 'uniswapV3' },
+      uniswapV3QuoterV2: { address: addr('0xB048Bbc1Ee6b733FFfCFb9e9CeF7375518e25997'), dexType: 'uniswapV3' },
+      aerodromeRouter: { address: addr('0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43'), dexType: 'aerodrome' },
+      aerodromeFactory: { address: addr('0x420DD381b31aEf6683db6B902084cB0FFECe40Da'), dexType: 'aerodrome' },
     },
     aave: {
       pool: addr('0xA238Dd80C259a72e81d7e4664a9801593F98d1c5'),
@@ -48,13 +48,13 @@ const CONFIG_BY_CHAIN: any = {
       RDNT: addr('0x3082CCd61395b7F5052047E24c3218559D06D7A5'),
     },
     dexes: {
-      uniswapV3Router: addr('0xE592427A0AEce92De3Edee1F18E0157C05861564'),
-      uniswapV3Factory: addr('0x1F98431c8aD98523631AE4a59f267346ea31F984'),
-      uniswapV3QuoterV2: addr('0x61fFE014bA17989E743c5F6cB21bF9697530B21e'),
-      camelotV3Router: addr('0x1F721E64571A24194602120BCec23E6db1426442'),
-      camelotV3Factory: addr('0x1a3c1bdCc53784789C13374464c53E5B19d6Cba4'),
-      ramsesRouter: addr('0xAAA87963EFe74394b91747FA733E3917d68180E7'),
-      ramsesFactory: addr('0x07E60782535752be279929e2DFfDd136Db2e6b45'), // Ramses V3 (CL)
+      uniswapV3Router: { address: addr('0xE592427A0AEce92De3Edee1F18E0157C05861564'), dexType: 'uniswapV3' },
+      uniswapV3Factory: { address: addr('0x1F98431c8aD98523631AE4a59f267346ea31F984'), dexType: 'uniswapV3' },
+      uniswapV3QuoterV2: { address: addr('0x61fFE014bA17989E743c5F6cB21bF9697530B21e'), dexType: 'uniswapV3' },
+      camelotV3Router: { address: addr('0x1F721E64571A24194602120BCec23E6db1426442'), dexType: 'camelotV3' },
+      camelotV3Factory: { address: addr('0x1a3c9B1d2F0529D97f2afC5136Cc23e58f1FD35B'), dexType: 'camelotV3' },
+      ramsesRouter: { address: addr('0xAAA87963EFe74394b91747FA733E3917d68180E7'), dexType: 'ramses' },
+      ramsesFactory: { address: addr('0x07E60782535752be279929e2DFfDd136Db2e6b45'), dexType: 'ramses' }, // Ramses V3 (CL)
     },
     aave: {
       pool: addr('0x794a61358D6845594F94dc1DB02A252b5b4814aD'),

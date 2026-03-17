@@ -75,14 +75,19 @@ export class Scanner {
     for (const [key, value] of Object.entries(CONFIG.dexes)) {
       if (key.endsWith('Factory')) {
         const baseName = key.replace('Factory', '');
-        const type = baseName.includes('V3') ? (baseName.includes('camelot') ? DexType.ALGEBRA : DexType.UNISWAP_V3) : 
-                     (baseName.includes('aerodrome') || baseName.includes('ramses') ? DexType.SOLIDLY : DexType.UNISWAP_V2);
+        const factoryInfo = value as any;
+        const routerInfo = (CONFIG.dexes as any)[`${baseName}Router`];
         
+        let type = DexType.UNISWAP_V2;
+        if (factoryInfo.dexType === 'uniswapV3') type = DexType.UNISWAP_V3;
+        else if (factoryInfo.dexType === 'camelotV3') type = DexType.ALGEBRA;
+        else if (factoryInfo.dexType === 'aerodrome' || factoryInfo.dexType === 'ramses') type = DexType.SOLIDLY;
+
         dexConfigs.push({
           name: baseName,
           type: type,
-          factory: value,
-          router: (CONFIG.dexes as any)[`${baseName}Router`]
+          factory: factoryInfo.address,
+          router: routerInfo.address
         });
       }
     }
@@ -265,25 +270,28 @@ export class Scanner {
 
   private buildSwapLeg(dexName: string, tokenOut: string, defaultFee: number): SwapLeg {
     const config = (CONFIG.dexes as any);
+    const factoryInfo = config[`${dexName}Factory`];
+    const routerInfo = config[`${dexName}Router`];
+
     if (dexName.includes('V3') || dexName.includes('camelot')) {
       return {
-        router: config[`${dexName}Router`],
-        dexType: dexName.includes('camelot') ? DexType.ALGEBRA : DexType.UNISWAP_V3,
+        router: routerInfo.address,
+        dexType: (dexName.includes('camelot') || factoryInfo.dexType === 'camelotV3') ? DexType.ALGEBRA : DexType.UNISWAP_V3,
         fee: defaultFee,
         stable: false,
         factory: ethers.ZeroAddress
       };
     } else if (dexName.includes('aerodrome') || dexName.includes('ramses')) {
       return {
-        router: config[`${dexName}Router`],
+        router: routerInfo.address,
         dexType: DexType.SOLIDLY,
         fee: 0,
         stable: false, 
-        factory: config[`${dexName}Factory`]
+        factory: factoryInfo.address
       };
     } else { // V2
       return {
-        router: config[`${dexName}Router`],
+        router: routerInfo.address,
         dexType: DexType.UNISWAP_V2,
         fee: 0,
         stable: false,
@@ -303,7 +311,8 @@ export class Scanner {
       const amountInBig = typeof amountIn === 'bigint' ? amountIn : ethers.parseUnits(amountIn.toString(), tokenIn === CONFIG.tokens.USDC ? 6 : (DECIMALS_CACHE.get(tokenIn) || 18));
       
       if (dexName.includes('V3') || (dexName.includes('camelot') && CONFIG.chain.chainId === 42161) || (dexName.includes('ramses') && CONFIG.chain.chainId === 42161)) {
-        const quoter = new ethers.Contract(CONFIG.dexes.uniswapV3QuoterV2, UNI_V3_QUOTER_V2_ABI, this.wallet.provider);
+        const quoterAddr = (CONFIG.dexes as any).uniswapV3QuoterV2.address;
+        const quoter = new ethers.Contract(quoterAddr, UNI_V3_QUOTER_V2_ABI, this.wallet.provider);
         const params = {
           tokenIn,
           tokenOut,
@@ -315,8 +324,8 @@ export class Scanner {
         return quote.amountOut;
       } 
       else if (dexName.includes('aerodrome') || dexName.includes('ramses')) {
-        const routerAddr = (CONFIG.dexes as any)[`${dexName}Router`];
-        const factoryAddr = (CONFIG.dexes as any)[`${dexName}Factory`];
+        const routerAddr = (CONFIG.dexes as any)[`${dexName}Router`].address;
+        const factoryAddr = (CONFIG.dexes as any)[`${dexName}Factory`].address;
         const router = new ethers.Contract(routerAddr, AERO_ROUTER_ABI, this.wallet.provider);
         const routes = [{
           from: tokenIn,
@@ -329,7 +338,7 @@ export class Scanner {
       }
       else { // V2 fallback using getAmountsOut
         const config = (CONFIG.dexes as any);
-        const routerAddr = config[`${dexName}Router`];
+        const routerAddr = config[`${dexName}Router`].address;
         const router = new ethers.Contract(routerAddr, ['function getAmountsOut(uint256 amountIn, address[] path) view returns (uint256[] amounts)'], this.wallet.provider);
         const amounts = await router.getAmountsOut(amountInBig, [tokenIn, tokenOut]);
         return amounts[amounts.length - 1];
