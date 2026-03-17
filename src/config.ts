@@ -43,9 +43,9 @@ const CONFIG_BY_CHAIN: any = {
     contractAddress: '', 
     tokens: {
       USDC: addr('0xaf88d065e77c8cC2239327C5EDb3A432268e5831'),
-      ARB: addr('0x912CE59144191C1204E6455938cc2412b3f71f85'),
-      GMX: addr('0xfc5A1A57C311F15fe4341621Ec448c1f1967280A'),
-      RDNT: addr('0x3082CCd61395b7F5052047E24c3218559D06D7A5'),
+      ARB: addr('0x912CE59144191C1204E64559FE8253a0e49E6548'),
+      GMX: addr('0xfc5A1A6EB076a2C7aD06eD22C90d7E710E35ad0a'),
+      RDNT: addr('0x0C4681e6C0235179ec3D4F4fc4DF3d14FDD96017'),
     },
     dexes: {
       uniswapV3Router: { address: addr('0xE592427A0AEce92De3Edee1F18E0157C05861564'), dexType: 'uniswapV3' },
@@ -61,8 +61,8 @@ const CONFIG_BY_CHAIN: any = {
       flashFee: 0.0005,
     },
     watchPairs: [
-      { tokenOut: addr('0x912CE59144191C1204E6455938cc2412b3f71f85'), fee: 3000, name: 'ARB' },
-      { tokenOut: addr('0xfc5A1A57C311F15fe4341621Ec448c1f1967280A'), fee: 3000, name: 'GMX' },
+      { tokenOut: addr('0x912CE59144191C1204E64559FE8253a0e49E6548'), fee: 3000, name: 'ARB' },
+      { tokenOut: addr('0xfc5A1A6EB076a2C7aD06eD22C90d7E710E35ad0a'), fee: 3000, name: 'GMX' },
     ],
     surfaces: [
       { name: 'UniV3_Camelot', dex1: 'uniswapV3', dex2: 'camelotV3' },
