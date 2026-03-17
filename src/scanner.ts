@@ -138,7 +138,7 @@ export class Scanner {
         if (poolAddr && poolAddr !== ethers.ZeroAddress) {
           // --- Liquidity Check ---
           let liquidityUsdc = 0;
-          const isV3 = dex.type === DexType.UNISWAP_V3;
+          const isV3 = dex.type === DexType.UNISWAP_V3 || dex.type === DexType.ALGEBRA;
 
           if (isV3) {
             // Bypass liquidity check for V3 — tick-based liquidity is complex
@@ -146,11 +146,15 @@ export class Scanner {
           } else if (dex.type === DexType.UNISWAP_V2 || dex.type === DexType.SOLIDLY) {
             const v2pool = new ethers.Contract(poolAddr, [
               'function token0() view returns (address)',
+              'function token1() view returns (address)',
               'function getReserves() view returns (uint112, uint112, uint32)'
             ], this.wallet.provider);
             const t0 = await v2pool.token0();
+            const t1 = await v2pool.token1();
             const [r0, r1] = await v2pool.getReserves();
-            const resUsdc = t0.toLowerCase() === CONFIG.tokens.USDC.toLowerCase() ? r0 : r1;
+            
+            const usdcVariants = [CONFIG.tokens.USDC.toLowerCase(), '0xff970a61a04b1ca14834a43f5de4533ebddb5cc8'];
+            const resUsdc = usdcVariants.includes(t0.toLowerCase()) ? r0 : (usdcVariants.includes(t1.toLowerCase()) ? r1 : 0n);
             liquidityUsdc = Number(ethers.formatUnits(resUsdc, 6));
           }
 

@@ -103,9 +103,9 @@ export const CONFIG = {
   },
   discovery: {
     dexScreenerUrl: 'https://api.dexscreener.com/latest/dex/tokens/',
-    minDailyVolumeUsd: 50000,
+    minDailyVolumeUsd: 1000,
     maxDailyVolumeUsd: 5000000,
-    minLiquidityUsd: 10000,
+    minLiquidityUsd: 1000,
     refreshIntervalMs: 600000,
   },
   telegram: {
