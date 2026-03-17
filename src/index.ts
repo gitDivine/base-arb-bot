@@ -13,16 +13,23 @@ import { execSync } from 'child_process';
 
 function autoUpdate(): void {
   try {
-    console.log('[Update] Checking for updates...');
-    // Safety: Reset files modified by npm install before pulling
-    try { execSync('git checkout package.json package-lock.json', { timeout: 5000 }); } catch {}
+    const branch = 'main';
+    execSync(`git fetch origin ${branch}`, { stdio: 'ignore', timeout: 15000 });
     
-    const pullResultRaw = execSync('git pull', { encoding: 'utf8', timeout: 15000 });
-    const pullResult = pullResultRaw.trim();
-    console.log(`[Update] ${pullResult}`);
-    if (!pullResult.toLowerCase().includes('up to date')) {
-      console.log('[Update] New code pulled — restarting to apply changes...');
-      execSync('npm install --omit=dev', { encoding: 'utf8', timeout: 30000 });
+    const local = execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim();
+    const remote = execSync(`git rev-parse origin/${branch}`, { encoding: 'utf8' }).trim();
+    
+    if (local !== remote) {
+      console.log(`[Update] New version detected (${remote.slice(0, 7)}). Applying clean update...`);
+      
+      // Force clean reset to remote state
+      execSync(`git reset --hard origin/${branch}`, { stdio: 'inherit' });
+      
+      // Re-install dependencies
+      console.log('[Update] Re-installing dependencies...');
+      execSync('npm install --omit=dev', { encoding: 'utf8', timeout: 60000 });
+      
+      console.log('[Update] Update applied. Restarting bot...');
       process.exit(0);
     }
   } catch (err: any) {
