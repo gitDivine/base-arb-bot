@@ -34,14 +34,22 @@ export class Discovery {
         
         const pairs = (res.data?.pairs || []).filter((p: any) =>
           p.chainId === chainName &&
-          (p.dexId === 'uniswap' || p.dexId === 'aerodrome' || p.dexId === 'camelot' || p.dexId === 'ramses') &&
+          (p.dexId.startsWith('uniswap') || p.dexId.startsWith('aerodrome') || p.dexId.startsWith('camelot') || p.dexId.startsWith('ramses'))
+        );
+
+        this.logger.info('Discovery', `[DEBUG] ${address.slice(0, 8)}: Found ${pairs.length} pairs on ${chainName}`);
+        pairs.forEach((p: any) => {
+          this.logger.info('Discovery', `[DEBUG]   DEX: ${p.dexId} | Vol: $${Math.floor(p.volume?.h24 || 0)} | Liq: $${Math.floor(p.liquidity?.usd || 0)}`);
+        });
+
+        const filteredPairs = pairs.filter((p: any) => 
           parseFloat(p.volume?.h24 || 0) >= CONFIG.discovery.minDailyVolumeUsd &&
           parseFloat(p.liquidity?.usd || 0) >= CONFIG.discovery.minLiquidityUsd
         );
 
-        if (pairs.length >= 2) {
-          const mainPair = pairs.find((p: any) => p.dexId === primaryDex);
-          const sidePair = pairs.find((p: any) => secondaryDexes.includes(p.dexId));
+        if (filteredPairs.length >= 2) {
+          const mainPair = filteredPairs.find((p: any) => p.dexId.startsWith(primaryDex));
+          const sidePair = filteredPairs.find((p: any) => secondaryDexes.some(d => p.dexId.startsWith(d)));
 
           if (mainPair && sidePair) {
             const info: TokenInfo = {
