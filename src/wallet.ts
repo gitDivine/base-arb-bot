@@ -4,11 +4,11 @@ import { SwapLeg } from './types';
 
 // ArbBot contract ABI (only what the bot needs)
 const ARB_BOT_ABI = [
-  'function startArbitrage(address tokenOut, uint256 flashAmount, (address router, uint8 dexType, uint24 fee, bool stable, address factory) leg1, (address router, uint8 dexType, uint24 fee, bool stable, address factory) leg2, uint256 minProfitUsdc) external',
+  'function startArbitrage(address flashAsset, address tokenOut, uint256 flashAmount, (address router, uint8 dexType, uint24 fee, bool stable, address factory) leg1, (address router, uint8 dexType, uint24 fee, bool stable, address factory) leg2, uint256 minProfit) external',
   'function withdrawToken(address token) external',
   'function withdrawEth() external',
   'function owner() view returns (address)',
-  'event ArbitrageExecuted(address tokenOut, uint256 profit, address router1, address router2)',
+  'event ArbitrageExecuted(address tokenIn, address tokenOut, uint256 profit, address router1, address router2)',
 ];
 
 const ERC20_ABI = [
@@ -121,17 +121,19 @@ export class WalletManager {
   }
 
   async executeArbitrage(
+    flashAsset: string,
     tokenOut: string,
     flashAmount: number,
     leg1: SwapLeg,
     leg2: SwapLeg,
-    minProfitUsdc: number
+    minProfit: number
   ): Promise<{ txHash: string; gasUsed: number }> {
-    const flashAmountWei = ethers.parseUnits(flashAmount.toString(), 6);
-    const minProfitWei = ethers.parseUnits(minProfitUsdc.toString(), 6);
+    const isUsdc = flashAsset.toLowerCase() === CONFIG.tokens.USDC.toLowerCase();
+    const flashAmountWei = ethers.parseUnits(flashAmount.toString(), isUsdc ? 6 : 18);
+    const minProfitWei = ethers.parseUnits(minProfit.toString(), isUsdc ? 6 : 18);
 
     const data = this.contract.interface.encodeFunctionData('startArbitrage', [
-      tokenOut, flashAmountWei, leg1, leg2, minProfitWei
+      flashAsset, tokenOut, flashAmountWei, leg1, leg2, minProfitWei
     ]);
 
     const tx = await this.signer.sendTransaction({

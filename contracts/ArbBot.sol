@@ -45,7 +45,6 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 contract ArbBot is IFlashLoanSimpleReceiver, Ownable, ReentrancyGuard {
     IAavePool  public immutable AAVE_POOL;
-    address    public immutable USDC;
 
     enum DexType { UNISWAP_V2, UNISWAP_V3, SOLIDLY, ALGEBRA }
 
@@ -57,23 +56,23 @@ contract ArbBot is IFlashLoanSimpleReceiver, Ownable, ReentrancyGuard {
         address factory; // For Solidly
     }
 
-    event ArbitrageExecuted(address tokenOut, uint256 profit, address router1, address router2);
+    event ArbitrageExecuted(address tokenIn, address tokenOut, uint256 profit, address router1, address router2);
     event ProfitWithdrawn(address token, uint256 amount);
 
-    constructor(address _pool, address _usdc) Ownable(msg.sender) {
+    constructor(address _pool) Ownable(msg.sender) {
         AAVE_POOL = IAavePool(_pool);
-        USDC = _usdc;
     }
 
     function startArbitrage(
+        address flashAsset,
         address tokenOut, 
         uint256 flashAmount, 
         SwapLeg calldata leg1, 
         SwapLeg calldata leg2, 
-        uint256 minProfitUsdc
+        uint256 minProfit
     ) external onlyOwner {
-        bytes memory params = abi.encode(tokenOut, leg1, leg2, minProfitUsdc);
-        AAVE_POOL.flashLoanSimple(address(this), USDC, flashAmount, params, 0);
+        bytes memory params = abi.encode(flashAsset, tokenOut, leg1, leg2, minProfit);
+        AAVE_POOL.flashLoanSimple(address(this), flashAsset, flashAmount, params, 0);
     }
 
     function executeOperation(
@@ -86,23 +85,23 @@ contract ArbBot is IFlashLoanSimpleReceiver, Ownable, ReentrancyGuard {
         require(msg.sender == address(AAVE_POOL), "Untrusted caller");
         require(initiator == address(this), "Untrusted initiator");
 
-        (address tokenOut, SwapLeg memory leg1, SwapLeg memory leg2, uint256 minProfitUsdc) = abi.decode(params, (address, SwapLeg, SwapLeg, uint256));
+        (address flashAsset, address tokenOut, SwapLeg memory leg1, SwapLeg memory leg2, uint256 minProfit) = abi.decode(params, (address, address, SwapLeg, SwapLeg, uint256));
         
         uint256 repayAmount = amount + premium;
         
-        // Step 1: Buy tokenOut with USDC using Leg 1
-        uint256 tokenAmount = _swap(leg1, USDC, tokenOut, amount);
+        // Step 1: Buy tokenOut with flashAsset using Leg 1
+        uint256 tokenAmount = _swap(leg1, flashAsset, tokenOut, amount);
         
-        // Step 2: Sell tokenOut back to USDC using Leg 2
-        uint256 finalUsdc = _swap(leg2, tokenOut, USDC, tokenAmount);
+        // Step 2: Sell tokenOut back to flashAsset using Leg 2
+        uint256 finalFlashAsset = _swap(leg2, tokenOut, flashAsset, tokenAmount);
 
-        require(finalUsdc >= repayAmount, "Cannot repay loan");
-        uint256 profit = finalUsdc - repayAmount;
-        require(profit >= minProfitUsdc, "Insufficient profit");
+        require(finalFlashAsset >= repayAmount, "Cannot repay loan");
+        uint256 profit = finalFlashAsset - repayAmount;
+        require(profit >= minProfit, "Insufficient profit");
         
-        IERC20(USDC).approve(address(AAVE_POOL), repayAmount);
+        IERC20(flashAsset).approve(address(AAVE_POOL), repayAmount);
         
-        emit ArbitrageExecuted(tokenOut, profit, leg1.router, leg2.router);
+        emit ArbitrageExecuted(flashAsset, tokenOut, profit, leg1.router, leg2.router);
         return true;
     }
 

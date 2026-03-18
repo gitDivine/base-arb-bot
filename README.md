@@ -1,8 +1,8 @@
-# ⚡ Base Flash Loan Arbitrage Bot
+# ⚡ Multi-Asset Flash Loan Arbitrage Bot (Base & Arbitrum)
 
-Zero-capital arbitrage on **Base** using Aave V3 flash loans across **Uniswap V3** and **Aerodrome**.
+Zero-capital arbitrage using Aave V3 flash loans across **Uniswap V3**, **Aerodrome**, **Camelot V3**, and **Ramses**. Supports any asset (USDC, WETH, etc.) as a flash loan source.
 
-## Quick Start
+## Quick Start (Arbitrum One)
 
 ### 0. Install Dependencies
 
@@ -14,24 +14,6 @@ sudo apt update
 sudo apt install -y git curl
 curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
 sudo apt install -y nodejs
-```
-
-**macOS:**
-```bash
-# Install Homebrew if you don't have it
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-brew install git node
-```
-
-**Windows:**
-1. Download and install Git: https://git-scm.com/download/win
-2. Download and install Node.js 18+: https://nodejs.org
-
-Verify both are installed:
-```bash
-git --version
-node --version    # should show v18 or higher
-npm --version
 ```
 
 ### 1. Clone & Install
@@ -48,33 +30,16 @@ npm install
 cp .env.example .env
 ```
 
-Open `.env` in a text editor and fill in your values:
+Open `.env` in a text editor and fill in your values. For **Arbitrum**, ensure `ARB_HTTP_URL` and `ARB_WS_URL` are set.
+
+### 3. Deploy the Contract (Arbitrum)
 
 ```bash
-# Linux / Mac
-nano .env
-
-# Windows
-notepad .env
+# Deploys the multi-asset contract to Arbitrum
+npx ts-node scripts/deploy.ts
 ```
 
-Fill in these fields, then save and close (`Ctrl+O` → `Enter` → `Ctrl+X` in nano):
-
-| Variable | Where to get it |
-|---|---|
-| `PRIVATE_KEY` | MetaMask → Account Details → Export Private Key |
-| `BASE_HTTP_URL` | [Alchemy](https://alchemy.com) → Create App → Base Mainnet → HTTPS URL |
-| `BASE_WS_URL` | Same Alchemy app → WebSocket URL |
-
-> Your wallet needs a small amount of ETH on Base for gas (~$5–10).
-
-### 3. Deploy the Contract
-
-```bash
-npm run deploy
-```
-
-This compiles `contracts/ArbBot.sol`, deploys it to Base, and **auto-updates** your `.env` with the new contract address. No Remix needed.
+This compiles `contracts/ArbBot.sol`, deploys it to Arbitrum One, and **auto-updates** your `.env` with the new contract address.
 
 ### 4. Run
 
@@ -82,7 +47,7 @@ This compiles `contracts/ArbBot.sol`, deploys it to Base, and **auto-updates** y
 npm start
 ```
 
-The bot will start scanning for price gaps between Uniswap V3 and Aerodrome in real-time via WebSocket.
+The bot will start scanning for price gaps across all configured surfaces in real-time.
 
 ## Configuration
 
@@ -90,25 +55,23 @@ Edit `src/config.ts` to tune the bot:
 
 | Setting | Default | Description |
 |---|---|---|
-| `minProfitBps` | `60` | Minimum net gap after fees to fire |
-| `flashLoanAmount` | `30000` | USDC flash loan size |
-| `cooldownMs` | `2000` | Minimum time between trades |
+| `minProfitBps` | `12.0` | Minimum net gap after fees to fire |
+| `flashLoanAmount` | `100` | Base asset amount (e.g. 100 USDC or 100 WETH) |
+| `cooldownMs` | `1000` | Minimum time between trades |
+| `maxGasGwei` | `50.0` | Gas ceiling |
 
 ## How It Works
 
 ```
-Swap event detected → Compare prices on Uni vs Aero
-→ Subtract fees (Uni 30bps + Aero 20bps + Aave 5bps)
-→ If net gap >= 60bps → Borrow $30k USDC via flash loan
+Swap detected → Batch Quote via Multicall3 (Low RPC usage)
+→ Compare prices on Dex1 vs Dex2 (relative to baseAsset)
+→ If net gap >= minProfitUsdc → Borrow flashAsset (USDC/WETH) from Aave
 → Buy on cheap DEX, sell on expensive DEX
-→ Repay loan + keep profit — all in one transaction
+→ Repay loan + keep profit — all in one atomic transaction
 ```
 
 ## Safety & Hardening 🛡️
 
-- **Smart Contract Hardening**: Inherits from OpenZeppelin `ReentrancyGuard` and `Ownable` for professional-grade security.
-- **Reentrancy Protection**: Prevents malicious contract interactions from draining funds during swaps.
-- **Access Control**: Standardized `onlyOwner` modifiers on all administrative functions.
 - **Net Profit Math**: Filters opportunities to ensure they cover all fees + slippage.
 - **Price Cross-Validation**: Prevents firing on broken or manipulated price feeds.
 - **Dry Run Mode**: Toggle `DRY_RUN=true` in `.env` to simulate without risk.

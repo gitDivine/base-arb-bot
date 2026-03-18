@@ -28,11 +28,11 @@ const CONFIG_BY_CHAIN: any = {
       flashFee: 0.0005,
     },
     watchPairs: [
-      { tokenOut: addr('0x940181a94A35A4569E4529A3CDfB74e38FD98631'), fee: 3000, name: 'AERO' },
-      { tokenOut: addr('0xA88594D404727625A9437C3f886C7643872296AE'), fee: 3000, name: 'WELL' },
+      { tokenOut: addr('0x940181a94A35A4569E4529A3CDfB74e38FD98631'), baseToken: addr('0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'), fee: 3000, name: 'AERO' },
+      { tokenOut: addr('0xA88594D404727625A9437C3f886C7643872296AE'), baseToken: addr('0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'), fee: 3000, name: 'WELL' },
     ],
     surfaces: [
-      { name: 'UniV3_Aero', dex1: 'uniswapV3', dex2: 'aerodrome' },
+      { name: 'UniV3_Aero', dex1: 'uniswapV3', dex2: 'aerodrome', baseAsset: addr('0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913') },
     ]
   },
   arbitrum: {
@@ -43,9 +43,12 @@ const CONFIG_BY_CHAIN: any = {
     contractAddress: '', 
     tokens: {
       USDC: addr('0xaf88d065e77c8cC2239327C5EDb3A432268e5831'),
+      WETH: addr('0x82aF49447D8a07e3bd95BD0d56f352415231aA11'),
       ARB: addr('0x912CE59144191C1204E64559FE8253a0e49E6548'),
       GMX: addr('0xfc5A1A6EB076a2C7aD06eD22C90d7E710E35ad0a'),
       RDNT: addr('0x0C4681e6C0235179ec3D4F4fc4DF3d14FDD96017'),
+      PENDLE: addr('0x0c888319139947844059639149183cc48b11166b'),
+      DEGEN: addr('0x9f074d0e6C09d2F7e88220A956a2B03bC91'),
     },
     dexes: {
       uniswapV3Router: { address: addr('0xE592427A0AEce92De3Edee1F18E0157C05861564'), dexType: 'uniswapV3' },
@@ -61,12 +64,17 @@ const CONFIG_BY_CHAIN: any = {
       flashFee: 0.0005,
     },
     watchPairs: [
-      { tokenOut: addr('0x912CE59144191C1204E64559FE8253a0e49E6548'), fee: 3000, name: 'ARB' },
-      { tokenOut: addr('0xfc5A1A6EB076a2C7aD06eD22C90d7E710E35ad0a'), fee: 3000, name: 'GMX' },
+      { tokenOut: addr('0x912CE59144191C1204E64559FE8253a0e49E6548'), baseToken: addr('0xaf88d065e77c8cC2239327C5EDb3A432268e5831'), fee: 3000, name: 'ARB' },
+      { tokenOut: addr('0xfc5A1A6EB076a2C7aD06eD22C90d7E710E35ad0a'), baseToken: addr('0xaf88d065e77c8cC2239327C5EDb3A432268e5831'), fee: 3000, name: 'GMX' },
+      { tokenOut: addr('0x0C4681e6C0235179ec3D4F4fc4DF3d14FDD96017'), baseToken: addr('0xaf88d065e77c8cC2239327C5EDb3A432268e5831'), fee: 3000, name: 'RDNT' },
+      { tokenOut: addr('0x0c888319139947844059639149183cc48b11166b'), baseToken: addr('0xaf88d065e77c8cC2239327C5EDb3A432268e5831'), fee: 3000, name: 'PENDLE' },
+      { tokenOut: addr('0x9f074d0e6C09d2F7e88220A956a2B03bC91'), baseToken: addr('0x82aF49447D8a07e3bd95BD0d56f352415231aA11'), fee: 3000, name: 'DEGEN' }, // Degen vs WETH
+      { tokenOut: addr('0xaf88d065e77c8cC2239327C5EDb3A432268e5831'), baseToken: addr('0x82aF49447D8a07e3bd95BD0d56f352415231aA11'), fee: 500, name: 'USDC-WETH' }, // USDC vs WETH
     ],
     surfaces: [
-      { name: 'UniV3_Camelot', dex1: 'uniswapV3', dex2: 'camelotV3' },
-      { name: 'UniV3_Ramses', dex1: 'uniswapV3', dex2: 'ramses' },
+      { name: 'UniV3_Camelot_USDC', dex1: 'uniswapV3', dex2: 'camelotV3', baseAsset: addr('0xaf88d065e77c8cC2239327C5EDb3A432268e5831') },
+      { name: 'UniV3_Ramses_USDC', dex1: 'uniswapV3', dex2: 'ramses', baseAsset: addr('0xaf88d065e77c8cC2239327C5EDb3A432268e5831') },
+      { name: 'UniV3_Camelot_WETH', dex1: 'uniswapV3', dex2: 'camelotV3', baseAsset: addr('0x82aF49447D8a07e3bd95BD0d56f352415231aA11') },
     ]
   }
 };
@@ -92,6 +100,8 @@ export const CONFIG = {
     minProfitUsdc: 0.1,  // $0.10 net profit
     minProfitBps: 12.0,   // 12bps gap
     flashFee: 0.0005,
+    cooldownMs: 1000,
+    maxGasGwei: 50.0,
   },
   scanner: {
     uniFeeTiers: [100, 500, 3000, 10000] as const,

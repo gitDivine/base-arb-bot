@@ -35,23 +35,26 @@ const ERC20_ABI = ['function decimals() view returns (uint8)'];
 
 // --- State ---
 const PRICE_CACHE: Map<string, Map<string, number>> = new Map(); // dexName => (tokenAddr => priceInUSDC)
+const MULTICALL3_ABI = [
+  'function tryAggregate(bool requireSuccess, (address target, bytes callData)[] calls) external view returns ((bool success, bytes returnData)[])'
+];
+const MULTICALL3_ADDR = '0xcA11bde05977b3631167028862bE2a173976CA11';
+
 const DECIMALS_CACHE: Map<string, number> = new Map();
 
 export class Scanner {
-  private wallet: WalletManager;
-  private logger: Logger;
-  private rateLimiter: RateLimiter;
   private opportunityCallback?: (opp: ArbOpportunity) => void;
   private poolContracts: Map<string, ethers.Contract> = new Map();
   private cycleCount = 0;
   private highestGapSeen = 0;
   private lastReportTime = Date.now();
   private hitsToday = 0;
+  private multicall: ethers.Contract;
+  private quoteQueue: any[] = [];
+  private isProcessingQueue = false;
 
-  constructor(wallet: WalletManager, logger: Logger, rateLimiter: RateLimiter) {
-    this.wallet = wallet;
-    this.logger = logger;
-    this.rateLimiter = rateLimiter;
+  constructor(private wallet: WalletManager, private logger: Logger, private rateLimiter: RateLimiter) {
+    this.multicall = new ethers.Contract(MULTICALL3_ADDR, MULTICALL3_ABI, this.wallet.provider);
 
     // Heartbeat every 60 seconds
     setInterval(() => {
@@ -59,6 +62,9 @@ export class Scanner {
         this.logger.info('Scanner', `Heartbeat: Active monitoring of ${this.poolContracts.size} pools ✓`);
       }
     }, 60000);
+
+    // Start background processor for quote queue
+    setInterval(() => this.processQuoteQueue(), 100); // Process every 100ms
   }
 
   onOpportunity(cb: (opp: ArbOpportunity) => void): void {
@@ -104,44 +110,39 @@ export class Scanner {
     for (const dex of dexConfigs) {
       try {
         let poolAddr = ethers.ZeroAddress;
+        
         if (dex.type === DexType.UNISWAP_V3 || dex.type === DexType.ALGEBRA) {
           const factory = new ethers.Contract(dex.factory, UNI_V3_FACTORY_ABI, this.wallet.provider);
           
-          const usdcVariants = CONFIG.chain.chainId === 42161 
-            ? [CONFIG.tokens.USDC, '0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8'] 
-            : [CONFIG.tokens.USDC];
-
-          const feesToTry = [pair.fee, 500, 3000, 100, 10000];
-
-          for (const usdc of usdcVariants) {
-            // Priority 1: Algebra poolByPair (Camelot/Ramses CL often use this)
-            try {
-              poolAddr = await factory.poolByPair(usdc, pair.tokenOut);
+          // Try specific fee first
+          poolAddr = await factory.getPool(pair.baseToken, pair.tokenOut, pair.fee);
+          
+          if (!poolAddr || poolAddr === ethers.ZeroAddress) {
+            // Try common fees as fallback
+            for (const f of [500, 3000, 10000]) {
+              if (f === pair.fee) continue;
+              poolAddr = await factory.getPool(pair.baseToken, pair.tokenOut, f);
               if (poolAddr && poolAddr !== ethers.ZeroAddress) break;
-            } catch {}
-
-            // Priority 2: Standard getPool with multiple fee tiers
-            for (const fee of feesToTry) {
-              try {
-                poolAddr = await factory.getPool(usdc, pair.tokenOut, fee);
-                if (poolAddr && poolAddr !== ethers.ZeroAddress) break;
-              } catch {}
             }
-            if (poolAddr && poolAddr !== ethers.ZeroAddress) break;
           }
-        } else if (dex.type === DexType.SOLIDLY) {
+        } 
+        else if (dex.type === DexType.SOLIDLY) {
           const factory = new ethers.Contract(dex.factory, AERO_FACTORY_ABI, this.wallet.provider);
           try {
-            poolAddr = await factory.getPool(CONFIG.tokens.USDC, pair.tokenOut, false);
-            if (poolAddr === ethers.ZeroAddress) poolAddr = await factory.getPool(CONFIG.tokens.USDC, pair.tokenOut, true);
+            poolAddr = await factory.getPool(pair.baseToken, pair.tokenOut, false);
+            if (poolAddr === ethers.ZeroAddress) {
+              poolAddr = await factory.getPool(pair.baseToken, pair.tokenOut, true);
+            }
           } catch {
-            // Fallback for Ramses V1/V2 (Solidly) which uses getPair
-            poolAddr = await factory.getPair(CONFIG.tokens.USDC, pair.tokenOut, false);
-            if (poolAddr === ethers.ZeroAddress) poolAddr = await factory.getPair(CONFIG.tokens.USDC, pair.tokenOut, true);
+            poolAddr = await factory.getPair(pair.baseToken, pair.tokenOut, false);
+            if (poolAddr === ethers.ZeroAddress) {
+              poolAddr = await factory.getPair(pair.baseToken, pair.tokenOut, true);
+            }
           }
-        } else if (dex.type === DexType.UNISWAP_V2) {
+        } 
+        else { // V2
           const factory = new ethers.Contract(dex.factory, UNI_V2_FACTORY_ABI, this.wallet.provider);
-          poolAddr = await factory.getPair(CONFIG.tokens.USDC, pair.tokenOut);
+          poolAddr = await factory.getPair(pair.baseToken, pair.tokenOut);
         }
 
         if (poolAddr && poolAddr !== ethers.ZeroAddress) {
@@ -150,11 +151,11 @@ export class Scanner {
           this.logger.info('Scanner', `Initialized ${dex.name} for ${pair.name} (${typeLabel})`);
           
           // --- Liquidity Check ---
-          let liquidityUsdc = 0;
+          let liquidityBase = 0;
 
           if (isV3) {
             // Bypass liquidity check for V3 — tick-based liquidity is complex
-            liquidityUsdc = CONFIG.arb.flashLoanAmount * 100;
+            liquidityBase = CONFIG.arb.flashLoanAmount * 100;
           } else if (dex.type === DexType.UNISWAP_V2 || dex.type === DexType.SOLIDLY) {
             const v2pool = new ethers.Contract(poolAddr, [
               'function token0() view returns (address)',
@@ -165,21 +166,21 @@ export class Scanner {
             const t1 = await v2pool.token1();
             const [r0, r1] = await v2pool.getReserves();
             
-            const usdcVariants = [CONFIG.tokens.USDC.toLowerCase(), '0xff970a61a04b1ca14834a43f5de4533ebddb5cc8'];
-            const resUsdc = usdcVariants.includes(t0.toLowerCase()) ? r0 : (usdcVariants.includes(t1.toLowerCase()) ? r1 : 0n);
-            liquidityUsdc = Number(ethers.formatUnits(resUsdc, 6));
+            const decBase = await this.getDecimals(pair.baseToken);
+            const resBase = t0.toLowerCase() === pair.baseToken.toLowerCase() ? r0 : (t1.toLowerCase() === pair.baseToken.toLowerCase() ? r1 : 0n);
+            liquidityBase = Number(ethers.formatUnits(resBase, decBase));
           }
 
-          if (liquidityUsdc < CONFIG.arb.flashLoanAmount * 2) {
-            this.logger.warn('Scanner', `Skipping ${dex.name} for ${pair.name}: Insufficient liquidity ($${liquidityUsdc.toLocaleString()} USDC)`);
+          if (liquidityBase < CONFIG.arb.flashLoanAmount * 2) {
+            this.logger.warn('Scanner', `Skipping ${dex.name} for ${pair.name}: Insufficient liquidity ($${liquidityBase.toLocaleString()} ${pair.baseToken === CONFIG.tokens.USDC ? 'USDC' : 'WETH'})`);
             continue;
           }
 
           this.setupPoolSubscription(dex.name, dex.type, poolAddr, pair);
-          const price = await this.fetchPrice(dex.name, dex.type, poolAddr, pair.tokenOut);
+          const price = await this.fetchPrice(dex.name, dex.type, poolAddr, pair.tokenOut, pair.baseToken);
           if (price) {
             this.updatePriceCache(dex.name, pair.tokenOut, price);
-            const liquidityStr = isV3 ? 'V3 Pool' : `$${liquidityUsdc.toLocaleString()} USDC`;
+            const liquidityStr = isV3 ? 'V3 Pool' : `$${liquidityBase.toLocaleString()} ${pair.baseToken === CONFIG.tokens.USDC ? 'USDC' : 'WETH'}`;
             this.logger.success('Scanner', `Initialized ${dex.name} for ${pair.name} (${liquidityStr})`);
           }
         }
@@ -202,7 +203,7 @@ export class Scanner {
 
     this.wallet.provider.on({ address: poolAddr, topics: [topic] }, async () => {
       try {
-        const price = await this.fetchPrice(dexName, type, poolAddr, pair.tokenOut);
+        const price = await this.fetchPrice(dexName, type, poolAddr, pair.tokenOut, pair.baseToken);
         if (price) {
           const oldPrice = PRICE_CACHE.get(dexName)?.get(pair.tokenOut);
           if (price !== oldPrice) {
@@ -227,22 +228,23 @@ export class Scanner {
     if (!pair) return;
 
     for (const surface of CONFIG.scanner.surfaces) {
+      if (surface.baseAsset.toLowerCase() === tokenOut.toLowerCase()) continue; // Skip if tokenOut is the base asset
+      
       const price1 = PRICE_CACHE.get(surface.dex1)?.get(tokenOut);
       const price2 = PRICE_CACHE.get(surface.dex2)?.get(tokenOut);
 
       if (price1 && price2) {
-        await this.evaluateGap(pair, surface, price1, price2);
+        await this.evaluateGap(pair, surface, price1, price2, surface.baseAsset);
       }
     }
   }
 
-  private async evaluateGap(pair: WatchPair, surface: any, price1: number, price2: number): Promise<void> {
+  private async evaluateGap(pair: WatchPair, surface: any, price1: number, price2: number, baseAsset: string): Promise<void> {
     const gap1to2 = ((price2 - price1) / price1) * 10000; // buy1 sell2
     const gap2to1 = ((price1 - price2) / price2) * 10000; // buy2 sell1
 
     const bestGap = Math.max(gap1to2, gap2to1);
-    const buyDex = gap1to2 > gap2to1 ? surface.dex1 : surface.dex2;
-    const sellDex = gap1to2 > gap2to1 ? surface.dex2 : surface.dex1;
+    const direction = gap1to2 > gap2to1 ? 1 : 2; // 1: buy on dex1, sell on dex2; 2: buy on dex2, sell on dex1
 
     // Diagnostic tracking
     if (bestGap > this.highestGapSeen) this.highestGapSeen = bestGap;
@@ -257,56 +259,146 @@ export class Scanner {
     }
 
     // Estimate net gap (fees)
-    const fee1 = this.getDexFeeBps(buyDex);
-    const fee2 = this.getDexFeeBps(sellDex);
+    const buyDexName = direction === 1 ? surface.dex1 : surface.dex2;
+    const sellDexName = direction === 1 ? surface.dex2 : surface.dex1;
+    const fee1 = this.getDexFeeBps(buyDexName);
+    const fee2 = this.getDexFeeBps(sellDexName);
     const netGap = bestGap - fee1 - fee2 - 5; // -5bps for flash loan
 
     if (bestGap > 500) return; // Skip outlier
 
     if (netGap >= CONFIG.arb.minProfitBps) {
-      // Liquidity Guard: Check if flash amount is too large for the pool (V2 only check for now)
-      // We can estimate this if we have reserves in cache, but for now lets focus on the price fix first.
+      this.logger.info('Scanner', `Ratio Gap: ${pair.name} | ${buyDexName} → ${sellDexName} | ${netGap.toFixed(1)}bps. Queueing for verification...`);
+      
+      const leg1 = this.buildSwapLeg(buyDexName, pair.tokenOut, pair.fee);
+      const leg2 = this.buildSwapLeg(sellDexName, pair.tokenOut, pair.fee);
 
-      this.logger.info('Scanner', `Ratio Gap: ${pair.name} | ${buyDex} → ${sellDex} | ${netGap.toFixed(1)}bps. Verifying on-chain...`);
+      this.quoteQueue.push({ pair, surface, direction, leg1, leg2, netGap, baseAsset });
+    }
+  }
 
-      const quote1 = await this.getOnChainQuote(buyDex, CONFIG.tokens.USDC, pair.tokenOut, CONFIG.arb.flashLoanAmount, pair.fee);
-      if (!quote1) {
-        this.logger.warn('Scanner', `❌ Verification Failed: No quote for ${buyDex}`);
-        return;
-      }
-
-      const quote2 = await this.getOnChainQuote(sellDex, pair.tokenOut, CONFIG.tokens.USDC, quote1, pair.fee);
-      if (!quote2) {
-        this.logger.warn('Scanner', `❌ Verification Failed: No quote for ${sellDex}`);
-        return;
-      }
-
-      const realProfit = Number(ethers.formatUnits(quote2, 6)) - CONFIG.arb.flashLoanAmount;
-      const realGapBps = (realProfit / CONFIG.arb.flashLoanAmount) * 10000;
-
-      if (realProfit >= CONFIG.arb.minProfitUsdc) {
-        this.logger.success('Scanner', `✅ Profitable Quote: $${realProfit.toFixed(2)} (${realGapBps.toFixed(1)}bps)`);
-
-        const leg1 = this.buildSwapLeg(buyDex, pair.tokenOut, pair.fee);
-        const leg2 = this.buildSwapLeg(sellDex, pair.tokenOut, pair.fee);
-
-        const opportunity: ArbOpportunity = {
-          tokenOut: pair.tokenOut,
-          tokenName: pair.name,
-          leg1,
-          leg2,
-          gapBps: Math.round(realGapBps),
-          flashAmount: CONFIG.arb.flashLoanAmount,
-          estimatedProfit: realProfit,
-          timestamp: Date.now()
-        };
-
-        this.hitsToday++;
-        this.logger.opportunity(opportunity);
-        this.opportunityCallback?.(opportunity);
+  private async batchGetQuotes(requests: any[]): Promise<any[]> {
+    const calls: any[] = [];
+    
+    for (const req of requests) {
+      if (req.dexName.includes('V3') || (req.dexName.includes('camelot') && CONFIG.chain.chainId === 42161) || (req.dexName.includes('ramses') && CONFIG.chain.chainId === 42161)) {
+        const quoterAddr = (CONFIG.dexes as any).uniswapV3QuoterV2.address;
+        const quoter = new ethers.Interface(UNI_V3_QUOTER_V2_ABI);
+        const calldata = quoter.encodeFunctionData('quoteExactInputSingle', [{
+          tokenIn: req.tokenIn,
+          tokenOut: req.tokenOut,
+          amountIn: req.amountIn,
+          fee: req.fee,
+          sqrtPriceLimitX96: 0
+        }]);
+        calls.push({ target: quoterAddr, callData: calldata });
+      } else if (req.dexName.includes('aerodrome') || req.dexName.includes('ramses')) {
+        const routerAddr = (CONFIG.dexes as any)[`${req.dexName}Router`].address;
+        const factoryAddr = (CONFIG.dexes as any)[`${req.dexName}Factory`].address;
+        const router = new ethers.Interface(AERO_ROUTER_ABI);
+        const calldata = router.encodeFunctionData('getAmountsOut', [req.amountIn, [{
+          from: req.tokenIn,
+          to: req.tokenOut,
+          stable: false,
+          factory: factoryAddr
+        }]]);
+        calls.push({ target: routerAddr, callData: calldata });
       } else {
-        this.logger.warn('Scanner', `❌ Phantom Gap: Ratio indicated $${(CONFIG.arb.flashLoanAmount * (netGap / 10000)).toFixed(2)}, but Quoter says $${realProfit.toFixed(2)}`);
+        const routerAddr = (CONFIG.dexes as any)[`${req.dexName}Router`].address;
+        const router = new ethers.Interface(['function getAmountsOut(uint256 amountIn, address[] path) view returns (uint256[] amounts)']);
+        const calldata = router.encodeFunctionData('getAmountsOut', [req.amountIn, [req.tokenIn, req.tokenOut]]);
+        calls.push({ target: routerAddr, callData: calldata });
       }
+    }
+
+    try {
+      const results = await this.multicall.tryAggregate.staticCall(false, calls);
+      return results.map((res: any, i: number) => {
+        if (!res.success || res.returnData === '0x') return null;
+        const req = requests[i];
+        if (req.dexName.includes('V3') || (req.dexName.includes('camelot') && CONFIG.chain.chainId === 42161) || (req.dexName.includes('ramses') && CONFIG.chain.chainId === 42161)) {
+          const quoter = new ethers.Interface(UNI_V3_QUOTER_V2_ABI);
+          const decoded = quoter.decodeFunctionResult('quoteExactInputSingle', res.returnData);
+          return decoded.amountOut;
+        } else {
+          const router = new ethers.Interface(['function getAmountsOut(uint256 amountIn, address[] path) view returns (uint256[] amounts)']);
+          const decoded = router.decodeFunctionResult('getAmountsOut', res.returnData);
+          const amounts = decoded.amounts;
+          return amounts[amounts.length - 1];
+        }
+      });
+    } catch (e: any) {
+      this.logger.error('Scanner', `Multicall Failed: ${e.message}`);
+      return requests.map(() => null);
+    }
+  }
+
+  private async processQuoteQueue(): Promise<void> {
+    if (this.isProcessingQueue || this.quoteQueue.length === 0) return;
+    this.isProcessingQueue = true;
+
+    try {
+      const batchSize = 10;
+      const batch = this.quoteQueue.splice(0, batchSize);
+      
+      // Step 1: Batch quotes for first legs
+      const leg1Requests = batch.map(q => ({
+        dexName: q.direction === 1 ? q.surface.dex1 : q.surface.dex2,
+        tokenIn: q.baseAsset,
+        tokenOut: q.pair.tokenOut,
+        amountIn: ethers.parseUnits(CONFIG.arb.flashLoanAmount.toString(), q.baseAsset.toLowerCase() === CONFIG.tokens.USDC.toLowerCase() ? 6 : 18),
+        fee: q.pair.fee
+      }));
+
+      const leg1Quotes = await this.batchGetQuotes(leg1Requests);
+
+      // Step 2: Filter valid ones and batch for second legs
+      const validForLeg2 = batch.map((q, i) => ({ ...q, quote1: leg1Quotes[i] })).filter(q => q.quote1);
+      
+      if (validForLeg2.length > 0) {
+        const leg2Requests = validForLeg2.map(q => ({
+          dexName: q.direction === 1 ? q.surface.dex2 : q.surface.dex1,
+          tokenIn: q.pair.tokenOut,
+          tokenOut: q.baseAsset,
+          amountIn: q.quote1,
+          fee: q.pair.fee
+        }));
+
+        const leg2Quotes = await this.batchGetQuotes(leg2Requests);
+
+        // Step 3: Final evaluation
+        for (let i = 0; i < validForLeg2.length; i++) {
+          const q = validForLeg2[i];
+          const finalBaseAsset = leg2Quotes[i];
+          if (!finalBaseAsset) continue;
+
+          const baseDecimals = await this.getDecimals(q.baseAsset);
+          const realProfit = Number(ethers.formatUnits(finalBaseAsset, baseDecimals)) - CONFIG.arb.flashLoanAmount;
+          const realGapBps = (realProfit / CONFIG.arb.flashLoanAmount) * 10000;
+
+          if (realProfit >= CONFIG.arb.minProfitUsdc) {
+            this.logger.success('Scanner', `✅ Profitable Quote: ${q.pair.name} | $${realProfit.toFixed(2)} (${realGapBps.toFixed(1)}bps) on ${q.baseAsset === CONFIG.tokens.USDC ? 'USDC' : 'WETH'}`);
+            const opportunity: ArbOpportunity = {
+              tokenOut: q.pair.tokenOut,
+              tokenName: q.pair.name,
+              leg1: q.leg1,
+              leg2: q.leg2,
+              gapBps: Math.round(realGapBps),
+              flashAmount: CONFIG.arb.flashLoanAmount,
+              estimatedProfit: realProfit,
+              timestamp: Date.now(),
+              flashAsset: q.baseAsset // New field
+            };
+            this.hitsToday++;
+            this.logger.opportunity(opportunity);
+            this.opportunityCallback?.(opportunity);
+          } else {
+            this.logger.warn('Scanner', `❌ Phantom Gap: ${q.pair.name} | Ratio ${q.netGap.toFixed(1)}bps, Real ${realGapBps.toFixed(1)}bps`);
+          }
+        }
+      }
+    } finally {
+      this.isProcessingQueue = false;
     }
   }
 
@@ -391,11 +483,12 @@ export class Scanner {
     }
   }
 
-  private async fetchPrice(dexName: string, type: DexType, poolAddr: string, tokenOut: string): Promise<number | null> {
+  private async fetchPrice(dexName: string, type: DexType, poolAddr: string, tokenOut: string, baseToken: string): Promise<number | null> {
     try {
-      const dec = await this.getDecimals(tokenOut);
+      const decOut = await this.getDecimals(tokenOut);
+      const decBase = await this.getDecimals(baseToken);
 
-      if (type === DexType.UNISWAP_V3) {
+      if (type === DexType.UNISWAP_V3 || type === DexType.ALGEBRA) {
         const v3pool = new ethers.Contract(poolAddr, UNI_V3_POOL_ABI, this.wallet.provider);
         const slot0 = await v3pool.slot0();
         const sqrtPriceX96 = slot0[0];
@@ -403,32 +496,33 @@ export class Scanner {
 
         const Q96 = BigInt(2) ** BigInt(96);
         const p = Number(sqrtPriceX96) / Number(Q96);
-        let rate = p * p; // token1 per token0
+        const rate = p * p; // token1 per token0
 
-        const dec0 = await this.getDecimals(token0);
-        const dec1 = dec;
-
-        const adjustedRate = rate * (10 ** (Number(dec0) - Number(dec1)));
-
-        if (token0.toLowerCase() === CONFIG.tokens.USDC.toLowerCase()) {
+        if (token0.toLowerCase() === baseToken.toLowerCase()) {
+          // token0 is base (USDC/WETH), token1 is quote (ARB/DEGEN)
+          // rate is quote per base. Price (base per quote) = 1/rate
+          const adjustedRate = rate * (10 ** (Number(decBase) - Number(decOut)));
           return 1 / adjustedRate;
         } else {
+          // token1 is base, token0 is quote
+          // rate is base per quote.
+          const adjustedRate = rate * (10 ** (Number(decOut) - Number(decBase)));
           return adjustedRate;
         }
       }
       else if (type === DexType.SOLIDLY) {
-        const routerAddr = (CONFIG.dexes as any)[`${dexName}Router`];
-        const factoryAddr = (CONFIG.dexes as any)[`${dexName}Factory`];
+        const routerAddr = (CONFIG.dexes as any)[`${dexName}Router`].address;
+        const factoryAddr = (CONFIG.dexes as any)[`${dexName}Factory`].address;
         const router = new ethers.Contract(routerAddr, AERO_ROUTER_ABI, this.wallet.provider);
-        const amountIn = ethers.parseUnits('1', dec);
+        const amountIn = ethers.parseUnits('1', decOut);
         const routes = [{
           from: tokenOut,
-          to: CONFIG.tokens.USDC,
+          to: baseToken,
           stable: false,
           factory: factoryAddr
         }];
         const amounts = await router.getAmountsOut(amountIn, routes);
-        return Number(ethers.formatUnits(amounts[amounts.length - 1], 6));
+        return Number(ethers.formatUnits(amounts[amounts.length - 1], Number(decBase)));
       }
       else if (type === DexType.UNISWAP_V2) {
         const v2pool = new ethers.Contract(poolAddr, [
@@ -438,18 +532,24 @@ export class Scanner {
         const token0 = await v2pool.token0();
         const [r0, r1] = await v2pool.getReserves();
 
-        if (token0.toLowerCase() === CONFIG.tokens.USDC.toLowerCase()) {
-          return (Number(r0) / Number(r1)) * (10 ** (dec - 6));
+        if (token0.toLowerCase() === baseToken.toLowerCase()) {
+          // r0 is base, r1 is quote. Price = r0/r1
+          return (Number(r0) / Number(r1)) * (10 ** (Number(decOut) - Number(decBase)));
         } else {
-          return (Number(r1) / Number(r0)) * (10 ** (dec - 6));
+          // r1 is base, r0 is quote. Price = r1/r0
+          return (Number(r1) / Number(r0)) * (10 ** (Number(decOut) - Number(decBase)));
         }
       }
-    } catch { return null; }
-    return null;
+      return null;
+    } catch (e: any) {
+      this.logger.debug('Scanner', `Price fetch failed for ${dexName}: ${e.message}`);
+      return null;
+    }
   }
 
   private async getDecimals(token: string): Promise<number> {
     if (token.toLowerCase() === CONFIG.tokens.USDC.toLowerCase()) return 6;
+    if (token.toLowerCase() === CONFIG.tokens.WETH.toLowerCase()) return 18;
     if (DECIMALS_CACHE.has(token)) return DECIMALS_CACHE.get(token)!;
     const contract = new ethers.Contract(token, ERC20_ABI, this.wallet.provider);
     const d = await contract.decimals();

@@ -14,14 +14,14 @@ if (!PRIVATE_KEY || PRIVATE_KEY === 'your_private_key_here') {
     process.exit(1);
 }
 if (!RPC_URL || RPC_URL.includes('YOUR_KEY')) {
-    console.error('❌ Set BASE_HTTP_URL in your .env file first');
+    console.error('❌ Set ARB_HTTP_URL in your .env file first');
     process.exit(1);
 }
 
 async function main() {
     console.log('');
     console.log('  ╔══════════════════════════════════════╗');
-    console.log('  ║   ArbBot.sol — Deploy to Base        ║');
+    console.log('  ║   ArbBot.sol — Deploy to Arbitrum    ║');
     console.log('  ╚══════════════════════════════════════╝');
     console.log('');
 
@@ -77,8 +77,8 @@ async function main() {
 
     console.log('✅ Compiled successfully');
 
-    // ── 2. Deploy to Base ─────────────────────────────────────────
-    const provider = new ethers.JsonRpcProvider(RPC_URL, 8453, { staticNetwork: true });
+    // ── 2. Deploy to Arbitrum ─────────────────────────────────────────
+    const provider = new ethers.JsonRpcProvider(process.env.ARB_HTTP_URL || 'https://arb1.arbitrum.io/rpc', 42161, { staticNetwork: true });
     const signer = new ethers.Wallet(PRIVATE_KEY, provider);
 
     const balance = await provider.getBalance(signer.address);
@@ -87,16 +87,16 @@ async function main() {
     console.log(`📍 Deployer: ${signer.address}`);
     console.log(`💰 ETH Balance: ${ethBalance.toFixed(4)} ETH`);
 
-    if (ethBalance < 0.001) {
-        console.error('❌ Not enough ETH for deployment gas. Need at least 0.001 ETH on Base.');
+    if (ethBalance < 0.0005) {
+        console.error('❌ Not enough ETH for deployment gas. Need at least 0.0005 ETH on Arbitrum.');
         process.exit(1);
     }
 
-    console.log('⏳ Deploying ArbBot to Base Mainnet...');
+    console.log('⏳ Deploying ArbBot to Arbitrum One...');
 
+    const AavePool = '0x794a61358D6845594F94dc1DB02A252b5b4814aD';
     const factory = new ethers.ContractFactory(abi, bytecode, signer);
-    // Note: ArbBot constructor has no args, but if we add any, we should normalize them here.
-    const contract = await factory.deploy();
+    const contract = await factory.deploy(AavePool);
     await contract.waitForDeployment();
 
     const contractAddress = await contract.getAddress();

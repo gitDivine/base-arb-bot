@@ -58,6 +58,7 @@ export class Executor {
 
       // ONE atomic transaction — flash loan + buy + sell + repay
       const { txHash, gasUsed } = await this.wallet.executeArbitrage(
+        opp.flashAsset,
         opp.tokenOut,
         opp.flashAmount,
         opp.leg1,

@@ -1,6 +1,6 @@
-// types.ts — updated for EVM/Base (was Solana)
 export interface WatchPair {
   tokenOut: string;
+  baseToken: string; // New: USDC or WETH
   fee: number;
   name: string;
 }
@@ -24,6 +24,7 @@ export interface ArbOpportunity {
   flashAmount: number;
   estimatedProfit: number;
   timestamp: number;
+  flashAsset: string;
 }
 
 export interface TradeResult {
