@@ -160,7 +160,8 @@ export class Scanner {
 
           if (isV3) {
             // Bypass liquidity check for V3 — tick-based liquidity is complex
-            liquidityBase = CONFIG.arb.flashLoanAmount * 100;
+            const isUsdc = pair.baseToken.toLowerCase() === CONFIG.tokens.USDC.toLowerCase();
+            liquidityBase = (isUsdc ? CONFIG.arb.flashLoanAmountUsdc : CONFIG.arb.flashLoanAmountWeth) * 100;
           } else if (dex.type === DexType.UNISWAP_V2 || dex.type === DexType.SOLIDLY) {
             const v2pool = new ethers.Contract(poolAddr, [
               'function token0() view returns (address)',
@@ -176,8 +177,11 @@ export class Scanner {
             liquidityBase = Number(ethers.formatUnits(resBase, decBase));
           }
 
-          if (liquidityBase < CONFIG.arb.flashLoanAmount * 2) {
-            this.logger.warn('Scanner', `Skipping ${dex.name} for ${pair.name}: Insufficient liquidity ($${liquidityBase.toLocaleString()} ${pair.baseToken === CONFIG.tokens.USDC ? 'USDC' : 'WETH'})`);
+          const isUsdc = pair.baseToken.toLowerCase() === CONFIG.tokens.USDC.toLowerCase();
+          const flashAmount = isUsdc ? CONFIG.arb.flashLoanAmountUsdc : CONFIG.arb.flashLoanAmountWeth;
+
+          if (liquidityBase < flashAmount * 2) {
+            this.logger.warn('Scanner', `Skipping ${dex.name} for ${pair.name}: Insufficient liquidity ($${liquidityBase.toLocaleString()} ${isUsdc ? 'USDC' : 'WETH'})`);
             continue;
           }
 
@@ -346,14 +350,17 @@ export class Scanner {
       const batchSize = 10;
       const batch = this.quoteQueue.splice(0, batchSize);
       
-      // Step 1: Batch quotes for first legs
-      const leg1Requests = batch.map(q => ({
-        dexName: q.direction === 1 ? q.surface.dex1 : q.surface.dex2,
-        tokenIn: q.baseAsset,
-        tokenOut: q.pair.tokenOut,
-        amountIn: ethers.parseUnits(CONFIG.arb.flashLoanAmount.toString(), q.baseAsset.toLowerCase() === CONFIG.tokens.USDC.toLowerCase() ? 6 : 18),
-        fee: q.pair.fee
-      }));
+      const leg1Requests = batch.map(q => {
+        const isUsdc = q.baseAsset.toLowerCase() === CONFIG.tokens.USDC.toLowerCase();
+        const flashAmount = isUsdc ? CONFIG.arb.flashLoanAmountUsdc : CONFIG.arb.flashLoanAmountWeth;
+        return {
+          dexName: q.direction === 1 ? q.surface.dex1 : q.surface.dex2,
+          tokenIn: q.baseAsset,
+          tokenOut: q.pair.tokenOut,
+          amountIn: ethers.parseUnits(flashAmount.toString(), isUsdc ? 6 : 18),
+          fee: q.pair.fee
+        }
+      });
 
       const leg1Quotes = await this.batchGetQuotes(leg1Requests);
 
@@ -371,41 +378,74 @@ export class Scanner {
 
         const leg2Quotes = await this.batchGetQuotes(leg2Requests);
 
-        // Step 3: Final evaluation
+        // Step 3: Final evaluation & Parallel Dynamic Search 🔍⚡
         for (let i = 0; i < validForLeg2.length; i++) {
           const q = validForLeg2[i];
-          const finalBaseAsset = leg2Quotes[i];
-          if (!finalBaseAsset) continue;
-
+          const isUsdc = q.baseAsset.toLowerCase() === CONFIG.tokens.USDC.toLowerCase();
           const baseDecimals = await this.getDecimals(q.baseAsset);
-          const realProfit = Number(ethers.formatUnits(finalBaseAsset, baseDecimals)) - CONFIG.arb.flashLoanAmount;
-          const realGapBps = (realProfit / CONFIG.arb.flashLoanAmount) * 10000;
+          
+          const sizeFactors = [1.0, 0.5, 0.25]; // Common sizes to check in parallel
+          
+          const results = await Promise.all(sizeFactors.map(async (factor) => {
+            try {
+              const currentFlashAmount = (isUsdc ? CONFIG.arb.flashLoanAmountUsdc : CONFIG.arb.flashLoanAmountWeth) * factor;
+              let finalBaseAssetAfterSwap = BigInt(0);
 
-          if (realProfit >= CONFIG.arb.minProfitUsdc) {
-            // STEP 4: Simulation (Sniper Mode) 🎯
-            const opp: ArbOpportunity = {
-              tokenOut: q.pair.tokenOut,
-              tokenName: q.pair.name,
-              leg1: q.leg1,
-              leg2: q.leg2,
-              gapBps: Math.round(realGapBps),
-              flashAmount: CONFIG.arb.flashLoanAmount,
-              estimatedProfit: realProfit,
-              timestamp: Date.now(),
-              flashAsset: q.baseAsset
-            };
+              if (factor === 1.0) {
+                finalBaseAssetAfterSwap = leg2Quotes[i];
+              } else {
+                const amountInBig = ethers.parseUnits(currentFlashAmount.toString(), isUsdc ? 6 : 18);
+                const q1 = await this.getOnChainQuote(q.direction === 1 ? q.surface.dex1 : q.surface.dex2, q.baseAsset, q.pair.tokenOut, amountInBig, q.pair.fee);
+                if (!q1) return null;
+                const q2 = await this.getOnChainQuote(q.direction === 1 ? q.surface.dex2 : q.surface.dex1, q.pair.tokenOut, q.baseAsset, q1, q.pair.fee);
+                if (!q2) return null;
+                finalBaseAssetAfterSwap = q2;
+              }
 
-            const isSuccess = await this.simulateOpportunity(opp);
-            if (isSuccess) {
-              this.logger.success('Scanner', `🎯 Simulation SUCCESS: ${q.pair.name} | $${realProfit.toFixed(2)} (${realGapBps.toFixed(1)}bps)`);
-              this.hitsToday++;
-              this.logger.opportunity(opp);
-              if (this.opportunityCallback) this.opportunityCallback(opp);
-            } else {
-              this.logger.warn('Scanner', `❌ Simulation REVERTED: ${q.pair.name} (Phantom Gap)`);
+              const realProfit = Number(ethers.formatUnits(finalBaseAssetAfterSwap, baseDecimals)) - currentFlashAmount;
+              const realGapBps = (realProfit / currentFlashAmount) * 10000;
+
+              if (realProfit >= CONFIG.arb.minProfitUsdc) {
+                const opp: ArbOpportunity = {
+                  tokenOut: q.pair.tokenOut,
+                  tokenName: q.pair.name,
+                  leg1: q.leg1,
+                  leg2: q.leg2,
+                  gapBps: Math.round(realGapBps),
+                  flashAmount: currentFlashAmount,
+                  estimatedProfit: realProfit,
+                  timestamp: Date.now(),
+                  flashAsset: q.baseAsset
+                };
+
+                const isSuccess = await this.simulateOpportunity(opp);
+                if (isSuccess) return { opp, factor, realProfit };
+              }
+              return null;
+            } catch {
+              return null;
             }
+          }));
+
+          // Pick the result with the highest absolute profit
+          const bestResult = results
+            .filter(r => r !== null)
+            .sort((a, b) => b!.realProfit - a!.realProfit)[0];
+
+          if (bestResult) {
+            const sizeLabel = bestResult.factor === 1.0 ? 'FULL' : `${bestResult.factor * 100}%`;
+            this.logger.success('Scanner', `🎯 Optimal Size [${sizeLabel}]: ${q.pair.name} | $${bestResult.realProfit.toFixed(2)} (${bestResult.opp.gapBps}bps)`);
+            this.hitsToday++;
+            this.logger.opportunity(bestResult.opp);
+            if (this.opportunityCallback) this.opportunityCallback(bestResult.opp);
           } else {
-            this.logger.warn('Scanner', `❌ Phantom Gap: ${q.pair.name} | Ratio ${q.netGap.toFixed(1)}bps, Real ${realGapBps.toFixed(1)}bps`);
+            // Log rejection if the full size was a candidate but failed
+            const fullSizeResult = results[0]; // results[0] is factor 1.0
+            if (!fullSizeResult) {
+               // We only log "Phantom" if it looked good on paper but failed simulation
+               // Use initial ratio check to decide if it's worth logging as phantom
+               this.logger.debug('Scanner', `Skipping ${q.pair.name}: No successful size found.`);
+            }
           }
         }
       }

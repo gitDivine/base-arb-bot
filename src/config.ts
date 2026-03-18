@@ -120,7 +120,8 @@ export const CONFIG = {
   dexes: ACTIVE_CONFIG.dexes,
   aave: ACTIVE_CONFIG.aave,
   arb: {
-    flashLoanAmount: 100, // $100 USDC
+    flashLoanAmountUsdc: 100, // $100 USDC
+    flashLoanAmountWeth: 0.05, // ~0.05 WETH ($175)
     minProfitUsdc: 0.1,  // $0.10 net profit
     minProfitBps: 12.0,   // 12bps gap
     flashFee: 0.0005,
