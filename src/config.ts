@@ -49,6 +49,14 @@ const CONFIG_BY_CHAIN: any = {
       RDNT: addr('0x0C4681e6C0235179ec3D4F4fc4DF3d14FDD96017'),
       PENDLE: addr('0x0c888319139947844059639149183cc48b11166b'),
       DEGEN: addr('0x9f074d0e6C09d2F7e88220A956a2B03bC91'),
+      WBTC: addr('0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f'),
+      LINK: addr('0xf97f4df75117a78c1A5a0ADb814Af6572A704043'),
+      DAI: addr('0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1'),
+      UNI: addr('0xFa7F8980b0f1E61820213B524858178473450946'),
+      FRAX: addr('0x17FCB690CC242d99b03f05f884a4411139A8659F'),
+      LDO: addr('0x13Ad51ed4F1B7e9Dc168d8a00cB3f4dDD85EfA60'),
+      GNS: addr('0x18c11FD274C5ca9a7Ec216269FE82fEAED3D6191'),
+      CRV: addr('0x11cDb42B0EB44893576E3774032a1df6A8dEf85c'),
     },
     dexes: {
       uniswapV3Router: { address: addr('0xE592427A0AEce92De3Edee1F18E0157C05861564'), dexType: 'uniswapV3' },
@@ -64,10 +72,16 @@ const CONFIG_BY_CHAIN: any = {
       flashFee: 0.0005,
     },
     watchPairs: [
-      { tokenOut: addr('0x912CE59144191C1204E64559FE8253a0e49E6548'), baseToken: addr('0xaf88d065e77c8cC2239327C5EDb3A432268e5831'), fee: 3000, name: 'ARB' },
-      { tokenOut: addr('0xfc5A1A6EB076a2C7aD06eD22C90d7E710E35ad0a'), baseToken: addr('0xaf88d065e77c8cC2239327C5EDb3A432268e5831'), fee: 3000, name: 'GMX' },
       { tokenOut: addr('0x0C4681e6C0235179ec3D4F4fc4DF3d14FDD96017'), baseToken: addr('0xaf88d065e77c8cC2239327C5EDb3A432268e5831'), fee: 3000, name: 'RDNT' },
       { tokenOut: addr('0x0c888319139947844059639149183cc48b11166b'), baseToken: addr('0xaf88d065e77c8cC2239327C5EDb3A432268e5831'), fee: 3000, name: 'PENDLE' },
+      { tokenOut: addr('0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f'), baseToken: addr('0x82aF49447D8a07e3bd95BD0d56f352415231aA11'), fee: 500, name: 'WBTC' },
+      { tokenOut: addr('0xf97f4df75117a78c1A5a0ADb814Af6572A704043'), baseToken: addr('0x82aF49447D8a07e3bd95BD0d56f352415231aA11'), fee: 3000, name: 'LINK' },
+      { tokenOut: addr('0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1'), baseToken: addr('0xaf88d065e77c8cC2239327C5EDb3A432268e5831'), fee: 500, name: 'DAI' },
+      { tokenOut: addr('0xFa7F8980b0f1E61820213B524858178473450946'), baseToken: addr('0x82aF49447D8a07e3bd95BD0d56f352415231aA11'), fee: 3000, name: 'UNI' },
+      { tokenOut: addr('0x17FCB690CC242d99b03f05f884a4411139A8659F'), baseToken: addr('0xaf88d065e77c8cC2239327C5EDb3A432268e5831'), fee: 3000, name: 'FRAX' },
+      { tokenOut: addr('0x13Ad51ed4F1B7e9Dc168d8a00cB3f4dDD85EfA60'), baseToken: addr('0x82aF49447D8a07e3bd95BD0d56f352415231aA11'), fee: 3000, name: 'LDO' },
+      { tokenOut: addr('0x18c11FD274C5ca9a7Ec216269FE82fEAED3D6191'), baseToken: addr('0x82aF49447D8a07e3bd95BD0d56f352415231aA11'), fee: 3000, name: 'GNS' },
+      { tokenOut: addr('0x11cDb42B0EB44893576E3774032a1df6A8dEf85c'), baseToken: addr('0x82aF49447D8a07e3bd95BD0d56f352415231aA11'), fee: 3000, name: 'CRV' },
       { tokenOut: addr('0x9f074d0e6C09d2F7e88220A956a2B03bC91'), baseToken: addr('0x82aF49447D8a07e3bd95BD0d56f352415231aA11'), fee: 3000, name: 'DEGEN' }, // Degen vs WETH
       { tokenOut: addr('0xaf88d065e77c8cC2239327C5EDb3A432268e5831'), baseToken: addr('0x82aF49447D8a07e3bd95BD0d56f352415231aA11'), fee: 500, name: 'USDC-WETH' }, // USDC vs WETH
     ],
