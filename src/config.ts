@@ -12,9 +12,14 @@ const CONFIG_BY_CHAIN: any = {
     contractAddress: addr('0xbbFc8Bf808A0D1b964048B87c0787e03c97Cc341'),
     tokens: {
       USDC: addr('0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'),
+      WETH: addr('0x4200000000000000000000000000000000000006'),
       AERO: addr('0x940181a94A35A4569E4529A3CDfB74e38FD98631'),
       DAI: addr('0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb'),
-      WELL: addr('0xA88594D404727625A9437C3f886C7643872296AE'),
+      cbBTC: addr('0xcbB7C0000ab88b473b1f5afd9ef808440eed33Bf'),
+      WELL: addr('0xdcc822276d4e6bac33bfb1bad287f2b9b9f877a6'),
+      VIRTUAL: addr('0x0b3e328455c4059EEb9e3f84b5543F74E24e7E1b'),
+      MOXIE: addr('0x8c9037d1ef5c6d1f6816278c7aaf5491d24cd527'),
+      MAGA: addr('0xb794705e505299B7fF661B677EA9EE473254a5bf'),
     },
     dexes: {
       uniswapV3Router: { address: addr('0x2626664c2603336E57B271c5C0b26F421741e481'), dexType: 'uniswapV3' },
@@ -29,10 +34,15 @@ const CONFIG_BY_CHAIN: any = {
     },
     watchPairs: [
       { tokenOut: addr('0x940181a94A35A4569E4529A3CDfB74e38FD98631'), baseToken: addr('0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'), fee: 3000, name: 'AERO' },
-      { tokenOut: addr('0xA88594D404727625A9437C3f886C7643872296AE'), baseToken: addr('0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'), fee: 3000, name: 'WELL' },
+      { tokenOut: addr('0xdcc822276d4e6bac33bfb1bad287f2b9b9f877a6'), baseToken: addr('0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'), fee: 3000, name: 'WELL' },
+      { tokenOut: addr('0xcbB7C0000ab88b473b1f5afd9ef808440eed33Bf'), baseToken: addr('0x4200000000000000000000000000000000000006'), fee: 500, name: 'cbBTC' },
+      { tokenOut: addr('0x0b3e328455c4059EEb9e3f84b5543F74E24e7E1b'), baseToken: addr('0x4200000000000000000000000000000000000006'), fee: 3000, name: 'VIRTUAL' },
+      { tokenOut: addr('0x8c9037d1ef5c6d1f6816278c7aaf5491d24cd527'), baseToken: addr('0x4200000000000000000000000000000000000006'), fee: 3000, name: 'MOXIE' },
+      { tokenOut: addr('0xb794705e505299B7fF661B677EA9EE473254a5bf'), baseToken: addr('0x4200000000000000000000000000000000000006'), fee: 10000, name: 'MAGA' },
     ],
     surfaces: [
-      { name: 'UniV3_Aero', dex1: 'uniswapV3', dex2: 'aerodrome', baseAsset: addr('0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913') },
+      { name: 'UniV3_Aero_USDC', dex1: 'uniswapV3', dex2: 'aerodrome', baseAsset: addr('0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913') },
+      { name: 'UniV3_Aero_WETH', dex1: 'uniswapV3', dex2: 'aerodrome', baseAsset: addr('0x4200000000000000000000000000000000000006') },
     ]
   },
   arbitrum: {

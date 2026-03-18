@@ -35,10 +35,13 @@ const ERC20_ABI = ['function decimals() view returns (uint8)'];
 
 // --- State ---
 const PRICE_CACHE: Map<string, Map<string, number>> = new Map(); // dexName => (tokenAddr => priceInUSDC)
+const MULTICALL3_ADDR = '0xcA11bde05977b3631167028862bE2a173976CA11';
 const MULTICALL3_ABI = [
   'function tryAggregate(bool requireSuccess, (address target, bytes callData)[] calls) external view returns ((bool success, bytes returnData)[])'
 ];
-const MULTICALL3_ADDR = '0xcA11bde05977b3631167028862bE2a173976CA11';
+const ARB_BOT_ABI = [
+  'function startArbitrage(address asset, uint256 amount, address dex1, address dex2, address tokenOut, uint24 fee) external'
+];
 
 const DECIMALS_CACHE: Map<string, number> = new Map();
 
@@ -50,11 +53,13 @@ export class Scanner {
   private lastReportTime = Date.now();
   private hitsToday = 0;
   private multicall: ethers.Contract;
+  private botContract: ethers.Contract;
   private quoteQueue: any[] = [];
   private isProcessingQueue = false;
 
   constructor(private wallet: WalletManager, private logger: Logger, private rateLimiter: RateLimiter) {
     this.multicall = new ethers.Contract(MULTICALL3_ADDR, MULTICALL3_ABI, this.wallet.provider);
+    this.botContract = new ethers.Contract(CONFIG.wallet.contractAddress, ARB_BOT_ABI, this.wallet.provider);
 
     // Heartbeat every 60 seconds
     setInterval(() => {
@@ -377,8 +382,8 @@ export class Scanner {
           const realGapBps = (realProfit / CONFIG.arb.flashLoanAmount) * 10000;
 
           if (realProfit >= CONFIG.arb.minProfitUsdc) {
-            this.logger.success('Scanner', `✅ Profitable Quote: ${q.pair.name} | $${realProfit.toFixed(2)} (${realGapBps.toFixed(1)}bps) on ${q.baseAsset === CONFIG.tokens.USDC ? 'USDC' : 'WETH'}`);
-            const opportunity: ArbOpportunity = {
+            // STEP 4: Simulation (Sniper Mode) 🎯
+            const opp: ArbOpportunity = {
               tokenOut: q.pair.tokenOut,
               tokenName: q.pair.name,
               leg1: q.leg1,
@@ -387,11 +392,18 @@ export class Scanner {
               flashAmount: CONFIG.arb.flashLoanAmount,
               estimatedProfit: realProfit,
               timestamp: Date.now(),
-              flashAsset: q.baseAsset // New field
+              flashAsset: q.baseAsset
             };
-            this.hitsToday++;
-            this.logger.opportunity(opportunity);
-            this.opportunityCallback?.(opportunity);
+
+            const isSuccess = await this.simulateOpportunity(opp);
+            if (isSuccess) {
+              this.logger.success('Scanner', `🎯 Simulation SUCCESS: ${q.pair.name} | $${realProfit.toFixed(2)} (${realGapBps.toFixed(1)}bps)`);
+              this.hitsToday++;
+              this.logger.opportunity(opp);
+              if (this.opportunityCallback) this.opportunityCallback(opp);
+            } else {
+              this.logger.warn('Scanner', `❌ Simulation REVERTED: ${q.pair.name} (Phantom Gap)`);
+            }
           } else {
             this.logger.warn('Scanner', `❌ Phantom Gap: ${q.pair.name} | Ratio ${q.netGap.toFixed(1)}bps, Real ${realGapBps.toFixed(1)}bps`);
           }
@@ -399,6 +411,26 @@ export class Scanner {
       }
     } finally {
       this.isProcessingQueue = false;
+    }
+  }
+
+  private async simulateOpportunity(opp: ArbOpportunity): Promise<boolean> {
+    try {
+      const amount = ethers.parseUnits(opp.flashAmount.toString(), opp.flashAsset.toLowerCase() === CONFIG.tokens.USDC.toLowerCase() ? 6 : 18);
+
+      // We use staticCall to simulate the transaction for $0 gas
+      await this.botContract.startArbitrage.staticCall(
+        opp.flashAsset,
+        amount,
+        opp.leg1.router,
+        opp.leg2.router,
+        opp.tokenOut,
+        opp.leg1.fee
+      );
+
+      return true; // If staticCall doesn't throw, it's a success
+    } catch (e: any) {
+      return false;
     }
   }
 
