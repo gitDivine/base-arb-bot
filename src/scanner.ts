@@ -59,6 +59,7 @@ export class Scanner {
   private botContract: ethers.Contract;
   private quoteQueue: any[] = [];
   private isProcessingQueue = false;
+  private feeCache: Map<string, number> = new Map(); // dexName_tokenOut => actual fee tier found on-chain
 
   constructor(private wallet: WalletManager, private logger: Logger, private rateLimiter: RateLimiter) {
     this.multicall = new ethers.Contract(MULTICALL3_ADDR, MULTICALL3_ABI, this.wallet.provider);
@@ -135,13 +136,18 @@ export class Scanner {
             }
           } else {
             const factory = new ethers.Contract(dex.factory, UNI_V3_FACTORY_ABI, this.wallet.provider);
+            let actualFee = pair.fee;
             poolAddr = await factory.getPool(pair.baseToken, pair.tokenOut, pair.fee);
             if (!poolAddr || poolAddr === ethers.ZeroAddress) {
               for (const f of [500, 3000, 10000]) {
                 if (f === pair.fee) continue;
                 poolAddr = await factory.getPool(pair.baseToken, pair.tokenOut, f);
-                if (poolAddr && poolAddr !== ethers.ZeroAddress) break;
+                if (poolAddr && poolAddr !== ethers.ZeroAddress) { actualFee = f; break; }
               }
+            }
+            // Cache the actual fee tier discovered on-chain for quote accuracy
+            if (poolAddr && poolAddr !== ethers.ZeroAddress) {
+              this.feeCache.set(`${dex.name}_${pair.tokenOut}`, actualFee);
             }
           }
         }
@@ -293,8 +299,10 @@ export class Scanner {
     if (netGap >= CONFIG.arb.minProfitBps) {
       this.logger.info('Scanner', `Ratio Gap: ${pair.name} | ${buyDexName} → ${sellDexName} | ${netGap.toFixed(1)}bps. Queueing for verification...`);
       
-      const leg1 = this.buildSwapLeg(buyDexName, pair.tokenOut, pair.fee);
-      const leg2 = this.buildSwapLeg(sellDexName, pair.tokenOut, pair.fee);
+      const buyFee = this.getActualFee(buyDexName, pair.tokenOut, pair.fee);
+      const sellFee = this.getActualFee(sellDexName, pair.tokenOut, pair.fee);
+      const leg1 = this.buildSwapLeg(buyDexName, pair.tokenOut, buyFee);
+      const leg2 = this.buildSwapLeg(sellDexName, pair.tokenOut, sellFee);
 
       this.quoteQueue.push({ pair, surface, direction, leg1, leg2, netGap, baseAsset });
     }
@@ -367,12 +375,13 @@ export class Scanner {
       const leg1Requests = batch.map(q => {
         const isUsdc = q.baseAsset.toLowerCase() === CONFIG.tokens.USDC.toLowerCase();
         const flashAmount = isUsdc ? CONFIG.arb.flashLoanAmountUsdc : CONFIG.arb.flashLoanAmountWeth;
+        const dexName = q.direction === 1 ? q.surface.dex1 : q.surface.dex2;
         return {
-          dexName: q.direction === 1 ? q.surface.dex1 : q.surface.dex2,
+          dexName,
           tokenIn: q.baseAsset,
           tokenOut: q.pair.tokenOut,
           amountIn: ethers.parseUnits(flashAmount.toString(), isUsdc ? 6 : 18),
-          fee: q.pair.fee
+          fee: this.getActualFee(dexName, q.pair.tokenOut, q.pair.fee)
         }
       });
 
@@ -382,13 +391,16 @@ export class Scanner {
       const validForLeg2 = batch.map((q, i) => ({ ...q, quote1: leg1Quotes[i] })).filter(q => q.quote1);
       
       if (validForLeg2.length > 0) {
-        const leg2Requests = validForLeg2.map(q => ({
-          dexName: q.direction === 1 ? q.surface.dex2 : q.surface.dex1,
-          tokenIn: q.pair.tokenOut,
-          tokenOut: q.baseAsset,
-          amountIn: q.quote1,
-          fee: q.pair.fee
-        }));
+        const leg2Requests = validForLeg2.map(q => {
+          const dexName = q.direction === 1 ? q.surface.dex2 : q.surface.dex1;
+          return {
+            dexName,
+            tokenIn: q.pair.tokenOut,
+            tokenOut: q.baseAsset,
+            amountIn: q.quote1,
+            fee: this.getActualFee(dexName, q.pair.tokenOut, q.pair.fee)
+          };
+        });
 
         const leg2Quotes = await this.batchGetQuotes(leg2Requests);
 
@@ -409,9 +421,11 @@ export class Scanner {
                 finalBaseAssetAfterSwap = leg2Quotes[i];
               } else {
                 const amountInBig = ethers.parseUnits(currentFlashAmount.toString(), isUsdc ? 6 : 18);
-                const q1 = await this.getOnChainQuote(q.direction === 1 ? q.surface.dex1 : q.surface.dex2, q.baseAsset, q.pair.tokenOut, amountInBig, q.pair.fee);
+                const buyDex = q.direction === 1 ? q.surface.dex1 : q.surface.dex2;
+                const sellDex = q.direction === 1 ? q.surface.dex2 : q.surface.dex1;
+                const q1 = await this.getOnChainQuote(buyDex, q.baseAsset, q.pair.tokenOut, amountInBig, this.getActualFee(buyDex, q.pair.tokenOut, q.pair.fee));
                 if (!q1) return null;
-                const q2 = await this.getOnChainQuote(q.direction === 1 ? q.surface.dex2 : q.surface.dex1, q.pair.tokenOut, q.baseAsset, q1, q.pair.fee);
+                const q2 = await this.getOnChainQuote(sellDex, q.pair.tokenOut, q.baseAsset, q1, this.getActualFee(sellDex, q.pair.tokenOut, q.pair.fee));
                 if (!q2) return null;
                 finalBaseAssetAfterSwap = q2;
               }
@@ -527,6 +541,10 @@ export class Scanner {
     if (dexName.toLowerCase().includes('v3') || dexName.toLowerCase().includes('camelot')) return 30; // 0.3% default
     if (dexName.toLowerCase().includes('aerodrome') || dexName.toLowerCase().includes('ramses')) return 20; // 0.2% volatile
     return 30; // V2 default
+  }
+
+  private getActualFee(dexName: string, tokenOut: string, defaultFee: number): number {
+    return this.feeCache.get(`${dexName}_${tokenOut}`) ?? defaultFee;
   }
 
   private async getOnChainQuote(dexName: string, tokenIn: string, tokenOut: string, amountIn: bigint | number, fee: number): Promise<bigint | null> {
