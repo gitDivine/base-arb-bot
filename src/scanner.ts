@@ -40,7 +40,10 @@ const MULTICALL3_ABI = [
   'function tryAggregate(bool requireSuccess, (address target, bytes callData)[] calls) external view returns ((bool success, bytes returnData)[])'
 ];
 const ARB_BOT_ABI = [
-  'function startArbitrage(address asset, uint256 amount, address dex1, address dex2, address tokenOut, uint24 fee) external'
+  'function startArbitrage(address flashAsset, address tokenOut, uint256 flashAmount, (address router, uint8 dexType, uint24 fee, bool stable, address factory) leg1, (address router, uint8 dexType, uint24 fee, bool stable, address factory) leg2, uint256 minProfit) external'
+];
+const RAMSES_FACTORY_ABI = [
+  'function getPool(address tokenA, address tokenB, int24 tickSpacing) view returns (address pool)'
 ];
 
 const DECIMALS_CACHE: Map<string, number> = new Map();
@@ -116,21 +119,32 @@ export class Scanner {
       try {
         let poolAddr = ethers.ZeroAddress;
         
-        if (dex.type === DexType.UNISWAP_V3 || dex.type === DexType.ALGEBRA) {
+        if (dex.type === DexType.ALGEBRA) {
+          // Camelot V3 uses Algebra — factory exposes poolByPair(tokenA, tokenB), no fee param
           const factory = new ethers.Contract(dex.factory, UNI_V3_FACTORY_ABI, this.wallet.provider);
-          
-          // Try specific fee first
-          poolAddr = await factory.getPool(pair.baseToken, pair.tokenOut, pair.fee);
-          
-          if (!poolAddr || poolAddr === ethers.ZeroAddress) {
-            // Try common fees as fallback
-            for (const f of [500, 3000, 10000]) {
-              if (f === pair.fee) continue;
-              poolAddr = await factory.getPool(pair.baseToken, pair.tokenOut, f);
+          poolAddr = await factory.poolByPair(pair.baseToken, pair.tokenOut);
+        }
+        else if (dex.type === DexType.UNISWAP_V3) {
+          const isRamses = dex.name.toLowerCase().includes('ramses');
+          if (isRamses) {
+            // Ramses V3 CL uses tick spacing (int24), not fee tier — common: 10, 60, 200
+            const factory = new ethers.Contract(dex.factory, RAMSES_FACTORY_ABI, this.wallet.provider);
+            for (const ts of [10, 60, 200]) {
+              poolAddr = await factory.getPool(pair.baseToken, pair.tokenOut, ts);
               if (poolAddr && poolAddr !== ethers.ZeroAddress) break;
             }
+          } else {
+            const factory = new ethers.Contract(dex.factory, UNI_V3_FACTORY_ABI, this.wallet.provider);
+            poolAddr = await factory.getPool(pair.baseToken, pair.tokenOut, pair.fee);
+            if (!poolAddr || poolAddr === ethers.ZeroAddress) {
+              for (const f of [500, 3000, 10000]) {
+                if (f === pair.fee) continue;
+                poolAddr = await factory.getPool(pair.baseToken, pair.tokenOut, f);
+                if (poolAddr && poolAddr !== ethers.ZeroAddress) break;
+              }
+            }
           }
-        } 
+        }
         else if (dex.type === DexType.SOLIDLY) {
           const factory = new ethers.Contract(dex.factory, AERO_FACTORY_ABI, this.wallet.provider);
           try {
@@ -439,13 +453,14 @@ export class Scanner {
             this.logger.opportunity(bestResult.opp);
             if (this.opportunityCallback) this.opportunityCallback(bestResult.opp);
           } else {
-            // Log rejection if the full size was a candidate but failed
-            const fullSizeResult = results[0]; // results[0] is factor 1.0
-            if (!fullSizeResult) {
-               // We only log "Phantom" if it looked good on paper but failed simulation
-               // Use initial ratio check to decide if it's worth logging as phantom
-               this.logger.debug('Scanner', `Skipping ${q.pair.name}: No successful size found.`);
+            // Find the best "almost" result for diagnostic logging
+            const anyResult = results.find(r => r !== null) || null;
+            if (anyResult) {
+              this.logger.warn('Scanner', `❌ Phantom Gap: ${q.pair.name} | Real: ${anyResult.realProfit.toFixed(2)} USD. Reverted/Unprofitable at all sizes.`);
+            } else {
+              this.logger.warn('Scanner', `❌ Simulation Error: ${q.pair.name} | Could not get valid quotes for any size.`);
             }
+            this.logger.debug('Scanner', `Skipping ${q.pair.name}: No successful size found.`);
           }
         }
       }
@@ -459,13 +474,15 @@ export class Scanner {
       const amount = ethers.parseUnits(opp.flashAmount.toString(), opp.flashAsset.toLowerCase() === CONFIG.tokens.USDC.toLowerCase() ? 6 : 18);
 
       // We use staticCall to simulate the transaction for $0 gas
+      const isUsdc = opp.flashAsset.toLowerCase() === CONFIG.tokens.USDC.toLowerCase();
+      const minProfitWei = ethers.parseUnits(CONFIG.arb.minProfitUsdc.toString(), isUsdc ? 6 : 18);
       await this.botContract.startArbitrage.staticCall(
         opp.flashAsset,
-        amount,
-        opp.leg1.router,
-        opp.leg2.router,
         opp.tokenOut,
-        opp.leg1.fee
+        amount,
+        opp.leg1,
+        opp.leg2,
+        minProfitWei
       );
 
       return true; // If staticCall doesn't throw, it's a success

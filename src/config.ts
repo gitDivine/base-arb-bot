@@ -49,8 +49,8 @@ const CONFIG_BY_CHAIN: any = {
     name: 'Arbitrum One',
     chainId: 42161,
     rpcHttp: process.env.ARB_HTTP_URL || 'https://arb1.arbitrum.io/rpc',
-    rpcWs: process.env.ARB_WS_URL || 'https://arbitrum-one-rpc.publicnode.com', 
-    contractAddress: '', 
+    rpcWs: process.env.ARB_WS_URL || 'wss://arbitrum-one-rpc.publicnode.com',
+    contractAddress: addr('0x1d1D09a9f891B3E0C62f5C1A3a6dC6DA7E4FE197'),
     tokens: {
       USDC: addr('0xaf88d065e77c8cC2239327C5EDb3A432268e5831'),
       WETH: addr('0x82aF49447D8a07e3bd95BD0d56f352415231aA11'),
@@ -75,7 +75,7 @@ const CONFIG_BY_CHAIN: any = {
       camelotV3Router: { address: addr('0x1F721E64571A24194602120BCec23E6db1426442'), dexType: 'camelotV3' },
       camelotV3Factory: { address: addr('0x1a3c9B1d2F0529D97f2afC5136Cc23e58f1FD35B'), dexType: 'camelotV3' },
       ramsesRouter: { address: addr('0xAAA87963EFe74394b91747FA733E3917d68180E7'), dexType: 'ramses' },
-      ramsesFactory: { address: addr('0x07E60782535752be279929e2DFfDd136Db2e6b45'), dexType: 'ramses' }, // Ramses V3 (CL)
+      ramsesFactory: { address: addr('0xd0019e86edB35E1fedaaB03aED5c3c60f115d28b'), dexType: 'ramses' }, // Ramses V3 CL (correct factory)
     },
     aave: {
       pool: addr('0x794a61358D6845594F94dc1DB02A252b5b4814aD'),
