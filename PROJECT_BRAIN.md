@@ -71,6 +71,7 @@ Three repos, one wallet, one Oracle VM, one Telegram manager:
 - ~~Fee tier mismatch in quotes~~ → feeCache stores actual discovered fee
 - ~~Liquidation bot variableDebtTokenAddress crash~~ → ethers v6 auto-unwrap fix
 - ~~bots-manager RPC_URL crash~~ → dead code removed
+- ~~Silent WS death~~ → 30s polling fallback added (2026-03-28)
 
 ### HIGH
 1. **Log duplication x5** — Multiple WS event listeners stacking on reconnect. Needs investigation.
@@ -166,3 +167,17 @@ export CONTRACT_ADDRESS=<deployed_address>
 
 **Next:**
 - User restarts bots on VPS, verify clean logs
+
+### Session: 2026-03-28 — Claude Opus 4.6 Agent
+**Done:**
+1. Diagnosed root cause of 0 trades in 29h: WebSocket subscriptions silently dead on public RPCs
+2. Added 30s polling fallback — refreshes all pool prices via HTTP regardless of WS state
+3. Added WS health tracking (lastWsEvent timestamp, logged every ~2.5 min)
+4. WS events still trigger instant updates when alive; polling ensures coverage when dead
+
+**Pending:**
+- Verify polling generates Ratio Gap lines after VPS auto-update
+- Monitor for first successful trade execution
+
+**Next:**
+- VPS auto-pulls in ≤10 min — watch for Poll #N log lines and gap detections
