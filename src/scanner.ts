@@ -60,6 +60,9 @@ export class Scanner {
   private quoteQueue: any[] = [];
   private isProcessingQueue = false;
   private feeCache: Map<string, number> = new Map(); // dexName_tokenOut => actual fee tier found on-chain
+  private poolMeta: { dexName: string; type: DexType; poolAddr: string; pair: WatchPair }[] = [];
+  private lastWsEvent = Date.now();
+  private pollCount = 0;
 
   constructor(private wallet: WalletManager, private logger: Logger, private rateLimiter: RateLimiter) {
     this.multicall = new ethers.Contract(MULTICALL3_ADDR, MULTICALL3_ABI, this.wallet.provider);
@@ -90,6 +93,7 @@ export class Scanner {
 
     this.logger.success('Scanner', `Watching ${this.poolContracts.size} pools across ${CONFIG.chain.name}`);
     this.startReconnectWatchdog();
+    this.startPollingFallback();
   }
 
   private async initDexPools(pair: WatchPair): Promise<void> {
@@ -224,6 +228,9 @@ export class Scanner {
     const contract = new ethers.Contract(poolAddr, abi, this.wallet.provider);
     this.poolContracts.set(`${dexName}_${pair.tokenOut}`, contract);
 
+    // Store metadata for polling fallback
+    this.poolMeta.push({ dexName, type, poolAddr, pair });
+
     const topic = (type === DexType.UNISWAP_V3 || type === DexType.ALGEBRA)
       ? ethers.id('Swap(address,address,int256,int256,uint160,uint128,int24)')
       : (type === DexType.SOLIDLY
@@ -231,6 +238,7 @@ export class Scanner {
         : ethers.id('Swap(address,uint256,uint256,uint256,uint256,address)'));
 
     this.wallet.provider.on({ address: poolAddr, topics: [topic] }, async () => {
+      this.lastWsEvent = Date.now();
       try {
         const price = await this.fetchPrice(dexName, type, poolAddr, pair.tokenOut, pair.baseToken);
         if (price) {
@@ -662,6 +670,44 @@ export class Scanner {
     const d = await contract.decimals();
     DECIMALS_CACHE.set(token, Number(d));
     return Number(d);
+  }
+
+  private startPollingFallback(): void {
+    const POLL_INTERVAL_MS = 30000; // 30 seconds
+    setInterval(async () => {
+      this.pollCount++;
+      const wsSilentSec = Math.round((Date.now() - this.lastWsEvent) / 1000);
+
+      // Log WS health every 5 polls (~2.5 min)
+      if (this.pollCount % 5 === 0) {
+        const status = wsSilentSec > 120 ? `⚠️ WS silent ${wsSilentSec}s — polling is primary` : `WS alive (last event ${wsSilentSec}s ago)`;
+        this.logger.info('Scanner', `Poll #${this.pollCount} | ${status}`);
+      }
+
+      // Refresh all pool prices via HTTP (RPC call, not WS event)
+      const tokensUpdated = new Set<string>();
+      for (const meta of this.poolMeta) {
+        try {
+          const price = await this.fetchPrice(meta.dexName, meta.type, meta.poolAddr, meta.pair.tokenOut, meta.pair.baseToken);
+          if (price) {
+            const oldPrice = PRICE_CACHE.get(meta.dexName)?.get(meta.pair.tokenOut);
+            if (price !== oldPrice) {
+              this.updatePriceCache(meta.dexName, meta.pair.tokenOut, price);
+              tokensUpdated.add(meta.pair.tokenOut);
+            }
+          }
+        } catch {
+          // Silently skip — individual pool fetch failures are fine
+        }
+      }
+
+      // Check surfaces for any tokens whose prices changed
+      for (const tokenOut of tokensUpdated) {
+        this.checkSurfaces(tokenOut);
+      }
+    }, POLL_INTERVAL_MS);
+
+    this.logger.info('Scanner', `Polling fallback active: refreshing ${this.poolMeta.length} pools every 30s`);
   }
 
   private startReconnectWatchdog(): void {
