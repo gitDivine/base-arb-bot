@@ -63,6 +63,7 @@ export class Scanner {
   private poolMeta: { dexName: string; type: DexType; poolAddr: string; pair: WatchPair }[] = [];
   private lastWsEvent = Date.now();
   private pollCount = 0;
+  private token0Cache: Map<string, string> = new Map(); // poolAddr => token0 address
 
   constructor(private wallet: WalletManager, private logger: Logger, private rateLimiter: RateLimiter) {
     this.multicall = new ethers.Contract(MULTICALL3_ADDR, MULTICALL3_ABI, this.wallet.provider);
@@ -678,36 +679,132 @@ export class Scanner {
       this.pollCount++;
       const wsSilentSec = Math.round((Date.now() - this.lastWsEvent) / 1000);
 
-      // Log WS health every 5 polls (~2.5 min)
       if (this.pollCount % 5 === 0) {
         const status = wsSilentSec > 120 ? `⚠️ WS silent ${wsSilentSec}s — polling is primary` : `WS alive (last event ${wsSilentSec}s ago)`;
         this.logger.info('Scanner', `Poll #${this.pollCount} | ${status}`);
       }
 
-      // Refresh all pool prices via HTTP (RPC call, not WS event)
       const tokensUpdated = new Set<string>();
-      for (const meta of this.poolMeta) {
+
+      // Partition pools by type
+      const v3Pools = this.poolMeta.filter(m => m.type === DexType.UNISWAP_V3 || m.type === DexType.ALGEBRA);
+      const v2Pools = this.poolMeta.filter(m => m.type === DexType.UNISWAP_V2);
+      const solidlyPools = this.poolMeta.filter(m => m.type === DexType.SOLIDLY);
+
+      // --- Batch: resolve missing token0 for V3 + V2 pools ---
+      const needToken0 = [...v3Pools, ...v2Pools].filter(m => !this.token0Cache.has(m.poolAddr));
+      if (needToken0.length > 0) {
+        try {
+          const iface = new ethers.Interface(['function token0() view returns (address)']);
+          const calls = needToken0.map(m => ({ target: m.poolAddr, callData: iface.encodeFunctionData('token0') }));
+          const results = await this.multicall.tryAggregate.staticCall(false, calls);
+          for (let i = 0; i < results.length; i++) {
+            if (results[i].success && results[i].returnData !== '0x') {
+              this.token0Cache.set(needToken0[i].poolAddr, iface.decodeFunctionResult('token0', results[i].returnData)[0]);
+            }
+          }
+        } catch { /* token0 batch failed — will retry next cycle */ }
+      }
+
+      // --- Batch: all V3 slot0() calls in one multicall ---
+      if (v3Pools.length > 0) {
+        try {
+          const iface = new ethers.Interface(UNI_V3_POOL_ABI);
+          const calls = v3Pools.map(m => ({ target: m.poolAddr, callData: iface.encodeFunctionData('slot0') }));
+          const results = await this.multicall.tryAggregate.staticCall(false, calls);
+
+          for (let i = 0; i < results.length; i++) {
+            const meta = v3Pools[i];
+            if (!results[i].success || results[i].returnData === '0x') continue;
+            const token0 = this.token0Cache.get(meta.poolAddr);
+            if (!token0) continue;
+            try {
+              const decoded = iface.decodeFunctionResult('slot0', results[i].returnData);
+              const sqrtPriceX96 = decoded[0];
+              const decOut = await this.getDecimals(meta.pair.tokenOut);
+              const decBase = await this.getDecimals(meta.pair.baseToken);
+              const Q96 = BigInt(2) ** BigInt(96);
+              const p = Number(sqrtPriceX96) / Number(Q96);
+              const rate = p * p;
+
+              let price: number;
+              if (token0.toLowerCase() === meta.pair.baseToken.toLowerCase()) {
+                price = 1 / (rate * (10 ** (Number(decBase) - Number(decOut))));
+              } else {
+                price = rate * (10 ** (Number(decOut) - Number(decBase)));
+              }
+
+              const oldPrice = PRICE_CACHE.get(meta.dexName)?.get(meta.pair.tokenOut);
+              if (price !== oldPrice) {
+                this.updatePriceCache(meta.dexName, meta.pair.tokenOut, price);
+                tokensUpdated.add(meta.pair.tokenOut);
+              }
+            } catch { /* individual decode failure */ }
+          }
+        } catch {
+          // Multicall failed — fallback to individual
+          for (const meta of v3Pools) {
+            try {
+              const price = await this.fetchPrice(meta.dexName, meta.type, meta.poolAddr, meta.pair.tokenOut, meta.pair.baseToken);
+              if (price) { const old = PRICE_CACHE.get(meta.dexName)?.get(meta.pair.tokenOut); if (price !== old) { this.updatePriceCache(meta.dexName, meta.pair.tokenOut, price); tokensUpdated.add(meta.pair.tokenOut); } }
+            } catch { /* skip */ }
+          }
+        }
+      }
+
+      // --- Batch: V2 getReserves() in one multicall ---
+      if (v2Pools.length > 0) {
+        try {
+          const iface = new ethers.Interface(UNI_V2_POOL_ABI);
+          const calls = v2Pools.map(m => ({ target: m.poolAddr, callData: iface.encodeFunctionData('getReserves') }));
+          const results = await this.multicall.tryAggregate.staticCall(false, calls);
+
+          for (let i = 0; i < results.length; i++) {
+            const meta = v2Pools[i];
+            if (!results[i].success || results[i].returnData === '0x') continue;
+            const token0 = this.token0Cache.get(meta.poolAddr);
+            if (!token0) continue;
+            try {
+              const decoded = iface.decodeFunctionResult('getReserves', results[i].returnData);
+              const decOut = await this.getDecimals(meta.pair.tokenOut);
+              const decBase = await this.getDecimals(meta.pair.baseToken);
+              let price: number;
+              if (token0.toLowerCase() === meta.pair.baseToken.toLowerCase()) {
+                price = (Number(decoded[0]) / Number(decoded[1])) * (10 ** (Number(decOut) - Number(decBase)));
+              } else {
+                price = (Number(decoded[1]) / Number(decoded[0])) * (10 ** (Number(decOut) - Number(decBase)));
+              }
+              const oldPrice = PRICE_CACHE.get(meta.dexName)?.get(meta.pair.tokenOut);
+              if (price !== oldPrice) { this.updatePriceCache(meta.dexName, meta.pair.tokenOut, price); tokensUpdated.add(meta.pair.tokenOut); }
+            } catch { /* skip */ }
+          }
+        } catch {
+          for (const meta of v2Pools) {
+            try {
+              const price = await this.fetchPrice(meta.dexName, meta.type, meta.poolAddr, meta.pair.tokenOut, meta.pair.baseToken);
+              if (price) { const old = PRICE_CACHE.get(meta.dexName)?.get(meta.pair.tokenOut); if (price !== old) { this.updatePriceCache(meta.dexName, meta.pair.tokenOut, price); tokensUpdated.add(meta.pair.tokenOut); } }
+            } catch { /* skip */ }
+          }
+        }
+      }
+
+      // --- Solidly pools: individual calls (router-based, not batchable) ---
+      for (const meta of solidlyPools) {
         try {
           const price = await this.fetchPrice(meta.dexName, meta.type, meta.poolAddr, meta.pair.tokenOut, meta.pair.baseToken);
           if (price) {
             const oldPrice = PRICE_CACHE.get(meta.dexName)?.get(meta.pair.tokenOut);
-            if (price !== oldPrice) {
-              this.updatePriceCache(meta.dexName, meta.pair.tokenOut, price);
-              tokensUpdated.add(meta.pair.tokenOut);
-            }
+            if (price !== oldPrice) { this.updatePriceCache(meta.dexName, meta.pair.tokenOut, price); tokensUpdated.add(meta.pair.tokenOut); }
           }
-        } catch {
-          // Silently skip — individual pool fetch failures are fine
-        }
+        } catch { /* skip */ }
       }
 
-      // Check surfaces for any tokens whose prices changed
       for (const tokenOut of tokensUpdated) {
         this.checkSurfaces(tokenOut);
       }
     }, POLL_INTERVAL_MS);
 
-    this.logger.info('Scanner', `Polling fallback active: refreshing ${this.poolMeta.length} pools every 30s`);
+    this.logger.info('Scanner', `Polling fallback active: refreshing ${this.poolMeta.length} pools every 30s (multicall batched)`);
   }
 
   private startReconnectWatchdog(): void {
