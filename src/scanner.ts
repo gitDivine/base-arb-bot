@@ -146,19 +146,21 @@ export class Scanner {
               if (poolAddr && poolAddr !== ethers.ZeroAddress) break;
             }
           } else {
+            // Always prefer cheapest fee tier — scan from lowest to highest
             const factory = new ethers.Contract(dex.factory, UNI_V3_FACTORY_ABI, this.wallet.provider);
             let actualFee = pair.fee;
-            poolAddr = await factory.getPool(pair.baseToken, pair.tokenOut, pair.fee);
-            if (!poolAddr || poolAddr === ethers.ZeroAddress) {
-              for (const f of [100, 500, 3000, 10000]) {
-                if (f === pair.fee) continue;
-                poolAddr = await factory.getPool(pair.baseToken, pair.tokenOut, f);
-                if (poolAddr && poolAddr !== ethers.ZeroAddress) { actualFee = f; break; }
-              }
+            let foundPool = ethers.ZeroAddress;
+            for (const f of [100, 500, 3000, 10000]) {
+              const addr = await factory.getPool(pair.baseToken, pair.tokenOut, f);
+              if (addr && addr !== ethers.ZeroAddress) { foundPool = addr; actualFee = f; break; }
             }
-            // Cache the actual fee tier discovered on-chain for quote accuracy
+            poolAddr = foundPool;
+            // Cache the cheapest fee tier discovered on-chain
             if (poolAddr && poolAddr !== ethers.ZeroAddress) {
               this.feeCache.set(`${dex.name}_${pair.tokenOut}`, actualFee);
+              if (actualFee !== pair.fee) {
+                this.logger.info('Scanner', `${dex.name} ${pair.name}: using fee tier ${actualFee} (${actualFee/100}bps) instead of default ${pair.fee}`);
+              }
             }
           }
         }
@@ -296,11 +298,15 @@ export class Scanner {
     
     // Cyclical Report every 500 checks or 5 mins
     if (this.cycleCount % 500 === 0 || (Date.now() - this.lastReportTime > 300000)) {
-      if (this.highestGapSeen > 0) {
-        this.logger.info('Scanner', `Performance Report: High Gap seen in last period: ${this.highestGapSeen.toFixed(1)}bps (Cycles: ${this.cycleCount})`);
-        this.highestGapSeen = 0;
-        this.lastReportTime = Date.now();
+      this.logger.info('Scanner', `Performance Report: High Gap: ${this.highestGapSeen.toFixed(1)}bps | Cycles: ${this.cycleCount} | Fee tiers: ${Array.from(this.feeCache.entries()).map(([k,v]) => `${k.split('_')[0]}=${v}`).join(', ')}`);
+      // Log price cache coverage per surface
+      for (const surface of CONFIG.scanner.surfaces) {
+        const dex1Prices = PRICE_CACHE.get(surface.dex1)?.size || 0;
+        const dex2Prices = PRICE_CACHE.get(surface.dex2)?.size || 0;
+        this.logger.info('Scanner', `  ${surface.name}: ${surface.dex1}=${dex1Prices} prices, ${surface.dex2}=${dex2Prices} prices`);
       }
+      this.highestGapSeen = 0;
+      this.lastReportTime = Date.now();
     }
 
     // Estimate net gap (fees)
