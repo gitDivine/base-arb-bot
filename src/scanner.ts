@@ -144,7 +144,7 @@ export class Scanner {
             let actualFee = pair.fee;
             poolAddr = await factory.getPool(pair.baseToken, pair.tokenOut, pair.fee);
             if (!poolAddr || poolAddr === ethers.ZeroAddress) {
-              for (const f of [500, 3000, 10000]) {
+              for (const f of [100, 500, 3000, 10000]) {
                 if (f === pair.fee) continue;
                 poolAddr = await factory.getPool(pair.baseToken, pair.tokenOut, f);
                 if (poolAddr && poolAddr !== ethers.ZeroAddress) { actualFee = f; break; }
@@ -299,8 +299,8 @@ export class Scanner {
     // Estimate net gap (fees)
     const buyDexName = direction === 1 ? surface.dex1 : surface.dex2;
     const sellDexName = direction === 1 ? surface.dex2 : surface.dex1;
-    const fee1 = this.getDexFeeBps(buyDexName);
-    const fee2 = this.getDexFeeBps(sellDexName);
+    const fee1 = this.getDexFeeBps(buyDexName, pair.tokenOut);
+    const fee2 = this.getDexFeeBps(sellDexName, pair.tokenOut);
     const netGap = bestGap - fee1 - fee2 - 5; // -5bps for flash loan
 
     if (bestGap > 500) return; // Skip outlier
@@ -546,10 +546,15 @@ export class Scanner {
     }
   }
 
-  private getDexFeeBps(dexName: string): number {
-    if (dexName.toLowerCase().includes('v3') || dexName.toLowerCase().includes('camelot')) return 30; // 0.3% default
-    if (dexName.toLowerCase().includes('aerodrome') || dexName.toLowerCase().includes('ramses')) return 20; // 0.2% volatile
-    return 30; // V2 default
+  private getDexFeeBps(dexName: string, tokenOut?: string): number {
+    // Use actual fee tier from cache if available (fee tier 500 = 5bps, 3000 = 30bps, 10000 = 100bps)
+    if (tokenOut) {
+      const actualFee = this.feeCache.get(`${dexName}_${tokenOut}`);
+      if (actualFee) return actualFee / 100; // fee tier 500 → 5bps, 3000 → 30bps
+    }
+    // Fallback for DEXes without fee tiers (Solidly/V2)
+    if (dexName.toLowerCase().includes('aerodrome') || dexName.toLowerCase().includes('ramses')) return 20;
+    return 30; // V3/V2 default
   }
 
   private getActualFee(dexName: string, tokenOut: string, defaultFee: number): number {

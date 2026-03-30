@@ -122,10 +122,10 @@ export const CONFIG = {
   dexes: ACTIVE_CONFIG.dexes,
   aave: ACTIVE_CONFIG.aave,
   arb: {
-    flashLoanAmountUsdc: 100, // $100 USDC
-    flashLoanAmountWeth: 0.05, // ~0.05 WETH ($175)
-    minProfitUsdc: 0.1,  // $0.10 net profit
-    minProfitBps: 12.0,   // 12bps gap
+    flashLoanAmountUsdc: 1000, // $1,000 USDC — 10x more profit per gap
+    flashLoanAmountWeth: 0.5,  // ~0.5 WETH ($1,750) — 10x more profit per gap
+    minProfitUsdc: 0.01, // $0.01 net profit — any real profit after all costs
+    minProfitBps: 5.0,   // 5bps gap — lower threshold since fee-aware gap calc now accurate
     flashFee: 0.0005,
     cooldownMs: 1000,
     maxGasGwei: 50.0,
@@ -138,9 +138,9 @@ export const CONFIG = {
   },
   discovery: {
     dexScreenerUrl: 'https://api.dexscreener.com/latest/dex/tokens/',
-    minDailyVolumeUsd: 1000,
-    maxDailyVolumeUsd: 5000000,
-    minLiquidityUsd: 1000,
+    minDailyVolumeUsd: 500,    // Lower threshold to catch more volatile tokens
+    maxDailyVolumeUsd: 50000000,
+    minLiquidityUsd: 500,      // Lower — thin liquidity = wider gaps (Dynamic Optimizer handles slippage)
     refreshIntervalMs: 600000,
   },
   telegram: {
