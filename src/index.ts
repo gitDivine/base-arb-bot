@@ -9,6 +9,7 @@ import { Executor } from './executor';
 import { Discovery } from './discovery';
 import { Logger } from './logger';
 import { RateLimiter } from './rate-limiter';
+import { MetricsCollector } from './metrics';
 import { execSync } from 'child_process';
 
 function autoUpdate(): void {
@@ -52,7 +53,8 @@ async function startBot(retryCount = 0): Promise<void> {
     await wallet.validateAndSwitchRpc();
 
     console.log('[Startup] Initializing Scanner, Executor, and Discovery...');
-    const scanner = new Scanner(wallet, logger, rateLimiter);
+    const metrics = new MetricsCollector(logger);
+    const scanner = new Scanner(wallet, logger, rateLimiter, metrics);
     const executor = new Executor(wallet, logger);
     const discovery = new Discovery(logger, rateLimiter);
 
@@ -65,13 +67,15 @@ async function startBot(retryCount = 0): Promise<void> {
     // Discovery run
     await discovery.run();
 
-    // Wire scanner → executor
+    // Wire scanner → executor (with metrics tracking)
     scanner.onOpportunity(async (opp) => {
-      await executor.execute(opp);
+      const result = await executor.execute(opp);
+      if (result.success) metrics.recordTrade();
     });
 
-    // Start WebSocket scanner
+    // Start WebSocket scanner + metrics reporting
     await scanner.start();
+    metrics.startReporting();
 
     logger.success('Bot', `Live on ${CONFIG.chain.name}. Listening for price gaps >= ${CONFIG.arb.minProfitBps}bps`);
 

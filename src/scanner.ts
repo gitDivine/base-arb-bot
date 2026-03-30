@@ -4,6 +4,7 @@ import { ArbOpportunity, DexType, SwapLeg, WatchPair } from './types';
 import { Logger } from './logger';
 import { RateLimiter } from './rate-limiter';
 import { WalletManager } from './wallet';
+import { MetricsCollector } from './metrics';
 
 // --- ABIs ---
 const UNI_V3_POOL_ABI = [
@@ -65,14 +66,17 @@ export class Scanner {
   private pollCount = 0;
   private token0Cache: Map<string, string> = new Map(); // poolAddr => token0 address
 
-  constructor(private wallet: WalletManager, private logger: Logger, private rateLimiter: RateLimiter) {
+  private metrics: MetricsCollector;
+
+  constructor(private wallet: WalletManager, private logger: Logger, private rateLimiter: RateLimiter, metrics?: MetricsCollector) {
+    this.metrics = metrics || new MetricsCollector(logger);
     this.multicall = new ethers.Contract(MULTICALL3_ADDR, MULTICALL3_ABI, this.wallet.provider);
     this.botContract = new ethers.Contract(CONFIG.wallet.contractAddress, ARB_BOT_ABI, this.wallet.provider);
 
-    // Heartbeat every 60 seconds
+    // Heartbeat every 60 seconds — now includes metrics
     setInterval(() => {
       if (this.poolContracts.size > 0) {
-        this.logger.info('Scanner', `Heartbeat: Active monitoring of ${this.poolContracts.size} pools ✓`);
+        this.logger.info('Scanner', this.metrics.getHeartbeatLine(this.poolContracts.size));
       }
     }, 60000);
 
@@ -83,6 +87,8 @@ export class Scanner {
   onOpportunity(cb: (opp: ArbOpportunity) => void): void {
     this.opportunityCallback = cb;
   }
+
+  getMetrics(): MetricsCollector { return this.metrics; }
 
   async start(): Promise<void> {
     this.logger.info('Scanner', 'Initializing multi-DEX monitor...');
@@ -246,6 +252,7 @@ export class Scanner {
           const oldPrice = PRICE_CACHE.get(dexName)?.get(pair.tokenOut);
           if (price !== oldPrice) {
             this.updatePriceCache(dexName, pair.tokenOut, price);
+            this.metrics.recordPriceUpdate();
             this.checkSurfaces(pair.tokenOut);
           }
         }
@@ -305,8 +312,12 @@ export class Scanner {
 
     if (bestGap > 500) return; // Skip outlier
 
-    if (netGap >= CONFIG.arb.minProfitBps) {
-      this.logger.info('Scanner', `Ratio Gap: ${pair.name} | ${buyDexName} → ${sellDexName} | ${netGap.toFixed(1)}bps. Queueing for verification...`);
+    // Record gap metrics (every evaluation, not just those that pass)
+    const passedThreshold = netGap >= CONFIG.arb.minProfitBps;
+    this.metrics.recordGap(bestGap, netGap, passedThreshold);
+
+    if (passedThreshold) {
+      this.logger.info('Scanner', `Ratio Gap: ${pair.name} | ${buyDexName} → ${sellDexName} | Raw: ${bestGap.toFixed(1)}bps Net: ${netGap.toFixed(1)}bps. Queueing...`);
       
       const buyFee = this.getActualFee(buyDexName, pair.tokenOut, pair.fee);
       const sellFee = this.getActualFee(sellDexName, pair.tokenOut, pair.fee);
@@ -396,6 +407,9 @@ export class Scanner {
 
       const leg1Quotes = await this.batchGetQuotes(leg1Requests);
 
+      // Record quote metrics
+      leg1Quotes.forEach(q => this.metrics.recordQuote(q !== null));
+
       // Step 2: Filter valid ones and batch for second legs
       const validForLeg2 = batch.map((q, i) => ({ ...q, quote1: leg1Quotes[i] })).filter(q => q.quote1);
       
@@ -412,6 +426,7 @@ export class Scanner {
         });
 
         const leg2Quotes = await this.batchGetQuotes(leg2Requests);
+        leg2Quotes.forEach(q => this.metrics.recordQuote(q !== null));
 
         // Step 3: Final evaluation & Parallel Dynamic Search 🔍⚡
         for (let i = 0; i < validForLeg2.length; i++) {
@@ -508,8 +523,10 @@ export class Scanner {
         minProfitWei
       );
 
-      return true; // If staticCall doesn't throw, it's a success
+      this.metrics.recordSimulation(true);
+      return true;
     } catch (e: any) {
+      this.metrics.recordSimulation(false);
       return false;
     }
   }

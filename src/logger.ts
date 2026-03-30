@@ -41,12 +41,12 @@ export class Logger {
     console.log(`[${time}] ${icons[level]} ${tag.padEnd(12)} | ${msg}`);
   }
 
-  async sendTelegram(msg: string): Promise<void> {
+  public async sendTelegram(msg: string): Promise<void> {
     if (!this.tgEnabled) return;
     try {
       await axios.post(`https://api.telegram.org/bot${CONFIG.telegram.botToken}/sendMessage`, {
         chat_id: CONFIG.telegram.chatId,
-        text: `🤖 Base Arb Bot\n${msg}`,
+        text: `🤖 ${CONFIG.chain.name} Arb Bot\n${msg}`,
         parse_mode: 'HTML',
       });
     } catch { /* silent fail */ }
