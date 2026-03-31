@@ -65,6 +65,8 @@ export class Scanner {
   private lastWsEvent = Date.now();
   private pollCount = 0;
   private token0Cache: Map<string, string> = new Map(); // poolAddr => token0 address
+  private phantomStrikes: Map<string, number> = new Map(); // tokenOut => consecutive phantom gap count
+  private readonly PHANTOM_STRIKE_LIMIT = 5; // Auto-exclude after 5 consecutive phantoms
 
   private metrics: MetricsCollector;
 
@@ -323,6 +325,18 @@ export class Scanner {
     this.metrics.recordGap(bestGap, netGap, passedThreshold);
 
     if (passedThreshold) {
+      // Skip tokens that consistently produce phantom gaps
+      const strikes = this.phantomStrikes.get(pair.tokenOut) || 0;
+      if (strikes >= this.PHANTOM_STRIKE_LIMIT) {
+        // Only log once per cooldown period (every 50th skip)
+        if (strikes % 50 === 0) {
+          this.logger.info('Scanner', `Phantom skip: ${pair.name} (${strikes} consecutive phantoms — auto-excluded)`);
+        }
+        this.phantomStrikes.set(pair.tokenOut, strikes + 1);
+        // Reset after 200 strikes (give it another chance periodically)
+        if (strikes >= 200) this.phantomStrikes.set(pair.tokenOut, 0);
+        return;
+      }
       this.logger.info('Scanner', `Ratio Gap: ${pair.name} | ${buyDexName} → ${sellDexName} | Raw: ${bestGap.toFixed(1)}bps Net: ${netGap.toFixed(1)}bps. Queueing...`);
       
       const buyFee = this.getActualFee(buyDexName, pair.tokenOut, pair.fee);
@@ -496,20 +510,26 @@ export class Scanner {
             const sizeLabel = bestResult.factor === 1.0 ? 'FULL' : `${bestResult.factor * 100}%`;
             this.logger.success('Scanner', `🎯 Optimal Size [${sizeLabel}]: ${q.pair.name} | $${bestResult.realProfit.toFixed(2)} (${bestResult.opp.gapBps}bps)`);
             this.hitsToday++;
+            this.phantomStrikes.set(q.pair.tokenOut, 0); // Reset strikes on success
             this.logger.opportunity(bestResult.opp);
             if (this.opportunityCallback) this.opportunityCallback(bestResult.opp);
           } else {
             // Diagnostic: show the best near-miss across all sizes
             const quotedResults = results.filter(r => r.quoted && r.realProfit > -Infinity);
+            // Track phantom strike
+            const currentStrikes = (this.phantomStrikes.get(q.pair.tokenOut) || 0) + 1;
+            this.phantomStrikes.set(q.pair.tokenOut, currentStrikes);
+
             if (quotedResults.length > 0) {
               const best = quotedResults.sort((a, b) => b.realProfit - a.realProfit)[0];
               const sizeLabel = best.factor === 1.0 ? 'FULL' : `${best.factor * 100}%`;
               const flashAmt = (isUsdc ? CONFIG.arb.flashLoanAmountUsdc : CONFIG.arb.flashLoanAmountWeth) * best.factor;
               const nearBps = (best.realProfit / flashAmt) * 10000;
               this.metrics.recordNearMiss(q.pair.name, sizeLabel, best.realProfit, nearBps);
-              this.logger.warn('Scanner', `Near-miss: ${q.pair.name} [${sizeLabel}] | $${best.realProfit.toFixed(4)} (${nearBps.toFixed(1)}bps) — need $${CONFIG.arb.minProfitUsdc} min`);
+              const strikeInfo = currentStrikes >= 3 ? ` [strike ${currentStrikes}/${this.PHANTOM_STRIKE_LIMIT}]` : '';
+              this.logger.warn('Scanner', `Near-miss: ${q.pair.name} [${sizeLabel}] | $${best.realProfit.toFixed(4)} (${nearBps.toFixed(1)}bps)${strikeInfo}`);
             } else {
-              this.logger.warn('Scanner', `❌ Quote fail: ${q.pair.name} | All sizes failed to get valid quotes`);
+              this.logger.warn('Scanner', `❌ Quote fail: ${q.pair.name} | All sizes failed [strike ${currentStrikes}/${this.PHANTOM_STRIKE_LIMIT}]`);
             }
           }
         }

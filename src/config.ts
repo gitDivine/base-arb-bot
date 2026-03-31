@@ -138,9 +138,9 @@ export const CONFIG = {
   },
   discovery: {
     dexScreenerUrl: 'https://api.dexscreener.com/latest/dex/tokens/',
-    minDailyVolumeUsd: 500,    // Lower threshold to catch more volatile tokens
+    minDailyVolumeUsd: 10000,   // $10k min daily volume — thin pools generate phantom gaps
     maxDailyVolumeUsd: 50000000,
-    minLiquidityUsd: 500,      // Lower — thin liquidity = wider gaps (Dynamic Optimizer handles slippage)
+    minLiquidityUsd: 5000,      // $5k min liquidity — need depth to absorb $100-$1000 flash without massive slippage
     refreshIntervalMs: 600000,
   },
   telegram: {
