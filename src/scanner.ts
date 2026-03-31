@@ -440,8 +440,8 @@ export class Scanner {
           const isUsdc = q.baseAsset.toLowerCase() === CONFIG.tokens.USDC.toLowerCase();
           const baseDecimals = await this.getDecimals(q.baseAsset);
           
-          const sizeFactors = [1.0, 0.5, 0.25]; // Common sizes to check in parallel
-          
+          const sizeFactors = [1.0, 0.5, 0.25, 0.1]; // Try down to 10% ($100) for thin pools
+
           const results = await Promise.all(sizeFactors.map(async (factor) => {
             try {
               const currentFlashAmount = (isUsdc ? CONFIG.arb.flashLoanAmountUsdc : CONFIG.arb.flashLoanAmountWeth) * factor;
@@ -454,9 +454,9 @@ export class Scanner {
                 const buyDex = q.direction === 1 ? q.surface.dex1 : q.surface.dex2;
                 const sellDex = q.direction === 1 ? q.surface.dex2 : q.surface.dex1;
                 const q1 = await this.getOnChainQuote(buyDex, q.baseAsset, q.pair.tokenOut, amountInBig, this.getActualFee(buyDex, q.pair.tokenOut, q.pair.fee));
-                if (!q1) return null;
+                if (!q1) return { opp: null, factor, realProfit: -Infinity, quoted: false };
                 const q2 = await this.getOnChainQuote(sellDex, q.pair.tokenOut, q.baseAsset, q1, this.getActualFee(sellDex, q.pair.tokenOut, q.pair.fee));
-                if (!q2) return null;
+                if (!q2) return { opp: null, factor, realProfit: -Infinity, quoted: false };
                 finalBaseAssetAfterSwap = q2;
               }
 
@@ -476,35 +476,40 @@ export class Scanner {
                   flashAsset: q.baseAsset
                 };
 
+                this.metrics.recordSimulation(true);
                 const isSuccess = await this.simulateOpportunity(opp);
-                if (isSuccess) return { opp, factor, realProfit };
+                if (isSuccess) return { opp, factor, realProfit, quoted: true };
+                this.metrics.recordSimulation(false);
               }
-              return null;
+              return { opp: null, factor, realProfit, quoted: true };
             } catch {
-              return null;
+              return { opp: null, factor, realProfit: -Infinity, quoted: false };
             }
           }));
 
-          // Pick the result with the highest absolute profit
+          // Pick the result with the highest absolute profit that passed simulation
           const bestResult = results
-            .filter(r => r !== null)
-            .sort((a, b) => b!.realProfit - a!.realProfit)[0];
+            .filter(r => r.opp !== null)
+            .sort((a, b) => b.realProfit - a.realProfit)[0];
 
-          if (bestResult) {
+          if (bestResult && bestResult.opp) {
             const sizeLabel = bestResult.factor === 1.0 ? 'FULL' : `${bestResult.factor * 100}%`;
             this.logger.success('Scanner', `🎯 Optimal Size [${sizeLabel}]: ${q.pair.name} | $${bestResult.realProfit.toFixed(2)} (${bestResult.opp.gapBps}bps)`);
             this.hitsToday++;
             this.logger.opportunity(bestResult.opp);
             if (this.opportunityCallback) this.opportunityCallback(bestResult.opp);
           } else {
-            // Find the best "almost" result for diagnostic logging
-            const anyResult = results.find(r => r !== null) || null;
-            if (anyResult) {
-              this.logger.warn('Scanner', `❌ Phantom Gap: ${q.pair.name} | Real: ${anyResult.realProfit.toFixed(2)} USD. Reverted/Unprofitable at all sizes.`);
+            // Diagnostic: show the best near-miss across all sizes
+            const quotedResults = results.filter(r => r.quoted && r.realProfit > -Infinity);
+            if (quotedResults.length > 0) {
+              const best = quotedResults.sort((a, b) => b.realProfit - a.realProfit)[0];
+              const sizeLabel = best.factor === 1.0 ? 'FULL' : `${best.factor * 100}%`;
+              const flashAmt = (isUsdc ? CONFIG.arb.flashLoanAmountUsdc : CONFIG.arb.flashLoanAmountWeth) * best.factor;
+              const nearBps = (best.realProfit / flashAmt) * 10000;
+              this.logger.warn('Scanner', `Near-miss: ${q.pair.name} [${sizeLabel}] | $${best.realProfit.toFixed(4)} (${nearBps.toFixed(1)}bps) — need $${CONFIG.arb.minProfitUsdc} min`);
             } else {
-              this.logger.warn('Scanner', `❌ Simulation Error: ${q.pair.name} | Could not get valid quotes for any size.`);
+              this.logger.warn('Scanner', `❌ Quote fail: ${q.pair.name} | All sizes failed to get valid quotes`);
             }
-            this.logger.debug('Scanner', `Skipping ${q.pair.name}: No successful size found.`);
           }
         }
       }
