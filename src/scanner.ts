@@ -770,6 +770,7 @@ export class Scanner {
               const oldPrice = PRICE_CACHE.get(meta.dexName)?.get(meta.pair.tokenOut);
               if (price !== oldPrice) {
                 this.updatePriceCache(meta.dexName, meta.pair.tokenOut, price);
+                this.metrics.recordPriceUpdate();
                 tokensUpdated.add(meta.pair.tokenOut);
               }
             } catch { /* individual decode failure */ }
@@ -779,7 +780,7 @@ export class Scanner {
           for (const meta of v3Pools) {
             try {
               const price = await this.fetchPrice(meta.dexName, meta.type, meta.poolAddr, meta.pair.tokenOut, meta.pair.baseToken);
-              if (price) { const old = PRICE_CACHE.get(meta.dexName)?.get(meta.pair.tokenOut); if (price !== old) { this.updatePriceCache(meta.dexName, meta.pair.tokenOut, price); tokensUpdated.add(meta.pair.tokenOut); } }
+              if (price) { const old = PRICE_CACHE.get(meta.dexName)?.get(meta.pair.tokenOut); if (price !== old) { this.updatePriceCache(meta.dexName, meta.pair.tokenOut, price); this.metrics.recordPriceUpdate(); tokensUpdated.add(meta.pair.tokenOut); } }
             } catch { /* skip */ }
           }
         }
@@ -808,14 +809,14 @@ export class Scanner {
                 price = (Number(decoded[1]) / Number(decoded[0])) * (10 ** (Number(decOut) - Number(decBase)));
               }
               const oldPrice = PRICE_CACHE.get(meta.dexName)?.get(meta.pair.tokenOut);
-              if (price !== oldPrice) { this.updatePriceCache(meta.dexName, meta.pair.tokenOut, price); tokensUpdated.add(meta.pair.tokenOut); }
+              if (price !== oldPrice) { this.updatePriceCache(meta.dexName, meta.pair.tokenOut, price); this.metrics.recordPriceUpdate(); tokensUpdated.add(meta.pair.tokenOut); }
             } catch { /* skip */ }
           }
         } catch {
           for (const meta of v2Pools) {
             try {
               const price = await this.fetchPrice(meta.dexName, meta.type, meta.poolAddr, meta.pair.tokenOut, meta.pair.baseToken);
-              if (price) { const old = PRICE_CACHE.get(meta.dexName)?.get(meta.pair.tokenOut); if (price !== old) { this.updatePriceCache(meta.dexName, meta.pair.tokenOut, price); tokensUpdated.add(meta.pair.tokenOut); } }
+              if (price) { const old = PRICE_CACHE.get(meta.dexName)?.get(meta.pair.tokenOut); if (price !== old) { this.updatePriceCache(meta.dexName, meta.pair.tokenOut, price); this.metrics.recordPriceUpdate(); tokensUpdated.add(meta.pair.tokenOut); } }
             } catch { /* skip */ }
           }
         }
@@ -827,7 +828,7 @@ export class Scanner {
           const price = await this.fetchPrice(meta.dexName, meta.type, meta.poolAddr, meta.pair.tokenOut, meta.pair.baseToken);
           if (price) {
             const oldPrice = PRICE_CACHE.get(meta.dexName)?.get(meta.pair.tokenOut);
-            if (price !== oldPrice) { this.updatePriceCache(meta.dexName, meta.pair.tokenOut, price); tokensUpdated.add(meta.pair.tokenOut); }
+            if (price !== oldPrice) { this.updatePriceCache(meta.dexName, meta.pair.tokenOut, price); this.metrics.recordPriceUpdate(); tokensUpdated.add(meta.pair.tokenOut); }
           }
         } catch { /* skip */ }
       }
