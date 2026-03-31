@@ -2,6 +2,13 @@
 import { CONFIG } from './config';
 import { Logger } from './logger';
 
+interface NearMiss {
+  tokenName: string;
+  sizePct: string;
+  profitUsd: number;
+  profitBps: number;
+}
+
 interface PeriodStats {
   gapsDetected: number;       // Total gap evaluations where bestGap > 0
   gapsAboveThreshold: number; // Gaps that passed minProfitBps filter
@@ -17,6 +24,8 @@ interface PeriodStats {
   highestRawGap: number;      // Peak raw gap in period
   highestNetGap: number;      // Peak net gap in period
   priceUpdates: number;       // Poll/WS price change events
+  bestNearMiss: NearMiss | null; // Closest to profitability
+  nearMissCount: number;      // Total near-misses (quoted but unprofitable)
   startTime: number;
 }
 
@@ -26,7 +35,8 @@ function freshStats(): PeriodStats {
     quotesAttempted: 0, quotesSucceeded: 0, quotesFailed: 0,
     simulationsRun: 0, simulationsPassed: 0, tradesExecuted: 0,
     rawGapSum: 0, netGapSum: 0, highestRawGap: 0, highestNetGap: 0,
-    priceUpdates: 0, startTime: Date.now(),
+    priceUpdates: 0, bestNearMiss: null, nearMissCount: 0,
+    startTime: Date.now(),
   };
 }
 
@@ -87,6 +97,18 @@ export class MetricsCollector {
     this.lifetime.priceUpdates++;
   }
 
+  recordNearMiss(tokenName: string, sizePct: string, profitUsd: number, profitBps: number): void {
+    this.current.nearMissCount++;
+    this.lifetime.nearMissCount++;
+    // Keep only the best (closest to profitable)
+    if (!this.current.bestNearMiss || profitUsd > this.current.bestNearMiss.profitUsd) {
+      this.current.bestNearMiss = { tokenName, sizePct, profitUsd, profitBps };
+    }
+    if (!this.lifetime.bestNearMiss || profitUsd > this.lifetime.bestNearMiss.profitUsd) {
+      this.lifetime.bestNearMiss = { tokenName, sizePct, profitUsd, profitBps };
+    }
+  }
+
   // --- Reporting ---
 
   getHeartbeatLine(poolCount: number): string {
@@ -129,7 +151,7 @@ export class MetricsCollector {
     const avgNet = s.gapsDetected > 0 ? (s.netGapSum / s.gapsDetected).toFixed(1) : '0';
     const rejRate = s.gapsDetected > 0 ? Math.round((s.gapsRejected / s.gapsDetected) * 100) : 0;
 
-    const msg = [
+    const lines = [
       `📊 Hourly Metrics — ${CONFIG.chain.name}`,
       ``,
       `Gaps: ${gapsPerHr}/hr (${s.gapsDetected} total)`,
@@ -139,7 +161,17 @@ export class MetricsCollector {
       `Simulations: ${s.simulationsPassed}/${s.simulationsRun} passed`,
       `Trades: ${s.tradesExecuted}`,
       `Price updates: ${s.priceUpdates}`,
-    ].join('\n');
+    ];
+
+    if (s.nearMissCount > 0 && s.bestNearMiss) {
+      const nm = s.bestNearMiss;
+      lines.push(``, `🎯 Near-misses: ${s.nearMissCount} total`);
+      lines.push(`Best: ${nm.tokenName} [${nm.sizePct}] $${nm.profitUsd.toFixed(4)} (${nm.profitBps.toFixed(1)}bps)`);
+    } else if (s.quotesSucceeded > 0) {
+      lines.push(``, `⚠️ ${s.quotesSucceeded} quotes passed but no near-miss data — check round-trip profitability`);
+    }
+
+    const msg = lines.join('\n');
 
     this.logger.sendTelegram(msg);
 

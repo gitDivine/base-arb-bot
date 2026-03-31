@@ -506,6 +506,7 @@ export class Scanner {
               const sizeLabel = best.factor === 1.0 ? 'FULL' : `${best.factor * 100}%`;
               const flashAmt = (isUsdc ? CONFIG.arb.flashLoanAmountUsdc : CONFIG.arb.flashLoanAmountWeth) * best.factor;
               const nearBps = (best.realProfit / flashAmt) * 10000;
+              this.metrics.recordNearMiss(q.pair.name, sizeLabel, best.realProfit, nearBps);
               this.logger.warn('Scanner', `Near-miss: ${q.pair.name} [${sizeLabel}] | $${best.realProfit.toFixed(4)} (${nearBps.toFixed(1)}bps) — need $${CONFIG.arb.minProfitUsdc} min`);
             } else {
               this.logger.warn('Scanner', `❌ Quote fail: ${q.pair.name} | All sizes failed to get valid quotes`);
@@ -717,6 +718,14 @@ export class Scanner {
         this.logger.info('Scanner', `Poll #${this.pollCount} | ${status}`);
       }
 
+      // Debug: log pool type breakdown on first poll
+      if (this.pollCount === 1) {
+        const v3c = this.poolMeta.filter(m => m.type === DexType.UNISWAP_V3 || m.type === DexType.ALGEBRA).length;
+        const v2c = this.poolMeta.filter(m => m.type === DexType.UNISWAP_V2).length;
+        const sc = this.poolMeta.filter(m => m.type === DexType.SOLIDLY).length;
+        this.logger.info('Scanner', `Poll init: ${this.poolMeta.length} pools (${v3c} V3/Alg, ${v2c} V2, ${sc} Solidly), token0Cache: ${this.token0Cache.size}`);
+      }
+
       const tokensUpdated = new Set<string>();
 
       // Partition pools by type
@@ -736,7 +745,7 @@ export class Scanner {
               this.token0Cache.set(needToken0[i].poolAddr, iface.decodeFunctionResult('token0', results[i].returnData)[0]);
             }
           }
-        } catch { /* token0 batch failed — will retry next cycle */ }
+        } catch (e: any) { this.logger.debug('Scanner', `token0 batch failed (${needToken0.length} pools): ${e.message?.slice(0, 100)}`); }
       }
 
       // --- Batch: all V3 slot0() calls in one multicall ---
@@ -773,9 +782,10 @@ export class Scanner {
                 this.metrics.recordPriceUpdate();
                 tokensUpdated.add(meta.pair.tokenOut);
               }
-            } catch { /* individual decode failure */ }
+            } catch (e: any) { this.logger.debug('Scanner', `slot0 decode fail [${meta.dexName}/${meta.pair.name}]: ${e.message?.slice(0, 80)}`); }
           }
-        } catch {
+        } catch (e: any) {
+          this.logger.warn('Scanner', `V3 slot0 multicall failed: ${e.message?.slice(0, 100)} — falling back to individual`);
           // Multicall failed — fallback to individual
           for (const meta of v3Pools) {
             try {
