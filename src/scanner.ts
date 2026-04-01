@@ -775,11 +775,13 @@ export class Scanner {
           const calls = v3Pools.map(m => ({ target: m.poolAddr, callData: iface.encodeFunctionData('slot0') }));
           const results = await this.multicall.tryAggregate.staticCall(false, calls);
 
+          let succeeded = 0, noToken0 = 0, decodeFails = 0, unchanged = 0;
           for (let i = 0; i < results.length; i++) {
             const meta = v3Pools[i];
             if (!results[i].success || results[i].returnData === '0x') continue;
+            succeeded++;
             const token0 = this.token0Cache.get(meta.poolAddr);
-            if (!token0) continue;
+            if (!token0) { noToken0++; continue; }
             try {
               const decoded = iface.decodeFunctionResult('slot0', results[i].returnData);
               const sqrtPriceX96 = decoded[0];
@@ -801,18 +803,25 @@ export class Scanner {
                 this.updatePriceCache(meta.dexName, meta.pair.tokenOut, price);
                 this.metrics.recordPriceUpdate();
                 tokensUpdated.add(meta.pair.tokenOut);
+              } else {
+                unchanged++;
               }
-            } catch (e: any) { this.logger.debug('Scanner', `slot0 decode fail [${meta.dexName}/${meta.pair.name}]: ${e.message?.slice(0, 80)}`); }
+            } catch (e: any) { decodeFails++; this.logger.debug('Scanner', `slot0 decode fail [${meta.dexName}/${meta.pair.name}]: ${e.message?.slice(0, 80)}`); }
+          }
+          // Log diagnostics every 10th poll
+          if (this.pollCount % 10 === 0) {
+            this.logger.info('Scanner', `V3 poll: ${v3Pools.length} pools | ${succeeded} slot0 ok | ${noToken0} no-token0 | ${decodeFails} decode-fail | ${unchanged} unchanged | ${tokensUpdated.size} updated`);
           }
         } catch (e: any) {
-          this.logger.warn('Scanner', `V3 slot0 multicall failed: ${e.message?.slice(0, 100)} — falling back to individual`);
-          // Multicall failed — fallback to individual
+          this.logger.warn('Scanner', `V3 slot0 multicall FAILED: ${e.message?.slice(0, 150)} — falling back to individual`);
+          let fallbackOk = 0, fallbackFail = 0;
           for (const meta of v3Pools) {
             try {
               const price = await this.fetchPrice(meta.dexName, meta.type, meta.poolAddr, meta.pair.tokenOut, meta.pair.baseToken);
-              if (price) { const old = PRICE_CACHE.get(meta.dexName)?.get(meta.pair.tokenOut); if (price !== old) { this.updatePriceCache(meta.dexName, meta.pair.tokenOut, price); this.metrics.recordPriceUpdate(); tokensUpdated.add(meta.pair.tokenOut); } }
-            } catch { /* skip */ }
+              if (price) { fallbackOk++; const old = PRICE_CACHE.get(meta.dexName)?.get(meta.pair.tokenOut); if (price !== old) { this.updatePriceCache(meta.dexName, meta.pair.tokenOut, price); this.metrics.recordPriceUpdate(); tokensUpdated.add(meta.pair.tokenOut); } }
+            } catch { fallbackFail++; }
           }
+          this.logger.warn('Scanner', `V3 fallback: ${fallbackOk} ok, ${fallbackFail} failed`);
         }
       }
 
@@ -853,14 +862,19 @@ export class Scanner {
       }
 
       // --- Solidly pools: individual calls (router-based, not batchable) ---
+      let solidlyOk = 0, solidlyFail = 0, solidlyUpdated = 0;
       for (const meta of solidlyPools) {
         try {
           const price = await this.fetchPrice(meta.dexName, meta.type, meta.poolAddr, meta.pair.tokenOut, meta.pair.baseToken);
           if (price) {
+            solidlyOk++;
             const oldPrice = PRICE_CACHE.get(meta.dexName)?.get(meta.pair.tokenOut);
-            if (price !== oldPrice) { this.updatePriceCache(meta.dexName, meta.pair.tokenOut, price); this.metrics.recordPriceUpdate(); tokensUpdated.add(meta.pair.tokenOut); }
+            if (price !== oldPrice) { this.updatePriceCache(meta.dexName, meta.pair.tokenOut, price); this.metrics.recordPriceUpdate(); tokensUpdated.add(meta.pair.tokenOut); solidlyUpdated++; }
           }
-        } catch { /* skip */ }
+        } catch { solidlyFail++; }
+      }
+      if (this.pollCount % 10 === 0 && solidlyPools.length > 0) {
+        this.logger.info('Scanner', `Solidly poll: ${solidlyPools.length} pools | ${solidlyOk} ok | ${solidlyFail} fail | ${solidlyUpdated} updated`);
       }
 
       for (const tokenOut of tokensUpdated) {
