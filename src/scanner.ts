@@ -32,6 +32,10 @@ const AERO_ROUTER_ABI = ['function getAmountsOut(uint256 amountIn, tuple(address
 const UNI_V2_POOL_ABI = ['event Swap(address indexed sender, uint amount0In, uint amount1In, uint amount0Out, uint amount1Out, address indexed to)', 'function getReserves() view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)'];
 const UNI_V2_FACTORY_ABI = ['function getPair(address tokenA, address tokenB) view returns (address pair)'];
 
+const ALGEBRA_POOL_ABI = [
+  'function globalState() view returns (uint160 price, int24 tick, uint16 fee, uint16 timepointIndex, uint8 communityFeeToken0, uint8 communityFeeToken1, bool unlocked)',
+  'function token0() view returns (address)',
+];
 const ERC20_ABI = ['function decimals() view returns (uint8)'];
 
 // --- State ---
@@ -730,6 +734,7 @@ export class Scanner {
   private startPollingFallback(): void {
     const POLL_INTERVAL_MS = 30000; // 30 seconds
     setInterval(async () => {
+     try {
       this.pollCount++;
       const wsSilentSec = Math.round((Date.now() - this.lastWsEvent) / 1000);
 
@@ -738,23 +743,31 @@ export class Scanner {
         this.logger.info('Scanner', `Poll #${this.pollCount} | ${status}`);
       }
 
+      // Refresh multicall provider reference in case of reconnection
+      if (this.multicall.runner !== this.wallet.provider) {
+        this.multicall = new ethers.Contract(MULTICALL3_ADDR, MULTICALL3_ABI, this.wallet.provider);
+        this.logger.info('Scanner', 'Multicall provider refreshed after reconnection');
+      }
+
       // Debug: log pool type breakdown on first poll
       if (this.pollCount === 1) {
-        const v3c = this.poolMeta.filter(m => m.type === DexType.UNISWAP_V3 || m.type === DexType.ALGEBRA).length;
+        const v3c = this.poolMeta.filter(m => m.type === DexType.UNISWAP_V3).length;
+        const algC = this.poolMeta.filter(m => m.type === DexType.ALGEBRA).length;
         const v2c = this.poolMeta.filter(m => m.type === DexType.UNISWAP_V2).length;
         const sc = this.poolMeta.filter(m => m.type === DexType.SOLIDLY).length;
-        this.logger.info('Scanner', `Poll init: ${this.poolMeta.length} pools (${v3c} V3/Alg, ${v2c} V2, ${sc} Solidly), token0Cache: ${this.token0Cache.size}`);
+        this.logger.info('Scanner', `Poll init: ${this.poolMeta.length} pools (${v3c} V3, ${algC} Algebra, ${v2c} V2, ${sc} Solidly), token0Cache: ${this.token0Cache.size}`);
       }
 
       const tokensUpdated = new Set<string>();
 
-      // Partition pools by type
-      const v3Pools = this.poolMeta.filter(m => m.type === DexType.UNISWAP_V3 || m.type === DexType.ALGEBRA);
+      // Partition pools by type — separate Algebra from standard V3
+      const v3Pools = this.poolMeta.filter(m => m.type === DexType.UNISWAP_V3);
+      const algebraPools = this.poolMeta.filter(m => m.type === DexType.ALGEBRA);
       const v2Pools = this.poolMeta.filter(m => m.type === DexType.UNISWAP_V2);
       const solidlyPools = this.poolMeta.filter(m => m.type === DexType.SOLIDLY);
 
-      // --- Batch: resolve missing token0 for V3 + V2 pools ---
-      const needToken0 = [...v3Pools, ...v2Pools].filter(m => !this.token0Cache.has(m.poolAddr));
+      // --- Batch: resolve missing token0 for V3 + Algebra + V2 pools ---
+      const needToken0 = [...v3Pools, ...algebraPools, ...v2Pools].filter(m => !this.token0Cache.has(m.poolAddr));
       if (needToken0.length > 0) {
         try {
           const iface = new ethers.Interface(['function token0() view returns (address)']);
@@ -825,6 +838,60 @@ export class Scanner {
         }
       }
 
+      // --- Batch: Algebra globalState() calls in one multicall ---
+      if (algebraPools.length > 0) {
+        try {
+          const iface = new ethers.Interface(ALGEBRA_POOL_ABI);
+          const calls = algebraPools.map(m => ({ target: m.poolAddr, callData: iface.encodeFunctionData('globalState') }));
+          const results = await this.multicall.tryAggregate.staticCall(false, calls);
+
+          let succeeded = 0, noToken0 = 0, decodeFails = 0, unchanged = 0;
+          for (let i = 0; i < results.length; i++) {
+            const meta = algebraPools[i];
+            if (!results[i].success || results[i].returnData === '0x') continue;
+            succeeded++;
+            const token0 = this.token0Cache.get(meta.poolAddr);
+            if (!token0) { noToken0++; continue; }
+            try {
+              const decoded = iface.decodeFunctionResult('globalState', results[i].returnData);
+              const sqrtPriceX96 = decoded[0]; // globalState returns price as first field (same as slot0 sqrtPriceX96)
+              const decOut = await this.getDecimals(meta.pair.tokenOut);
+              const decBase = await this.getDecimals(meta.pair.baseToken);
+              const Q96 = BigInt(2) ** BigInt(96);
+              const p = Number(sqrtPriceX96) / Number(Q96);
+              const rate = p * p;
+
+              let price: number;
+              if (token0.toLowerCase() === meta.pair.baseToken.toLowerCase()) {
+                price = 1 / (rate * (10 ** (Number(decBase) - Number(decOut))));
+              } else {
+                price = rate * (10 ** (Number(decOut) - Number(decBase)));
+              }
+
+              const oldPrice = PRICE_CACHE.get(meta.dexName)?.get(meta.pair.tokenOut);
+              if (price !== oldPrice) {
+                this.updatePriceCache(meta.dexName, meta.pair.tokenOut, price);
+                this.metrics.recordPriceUpdate();
+                tokensUpdated.add(meta.pair.tokenOut);
+              } else {
+                unchanged++;
+              }
+            } catch (e: any) { decodeFails++; }
+          }
+          if (this.pollCount % 10 === 0) {
+            this.logger.info('Scanner', `Algebra poll: ${algebraPools.length} pools | ${succeeded} globalState ok | ${noToken0} no-token0 | ${decodeFails} decode-fail | ${unchanged} unchanged | ${tokensUpdated.size - v3Pools.length} updated`);
+          }
+        } catch (e: any) {
+          this.logger.warn('Scanner', `Algebra globalState multicall FAILED: ${e.message?.slice(0, 150)} — falling back to individual`);
+          for (const meta of algebraPools) {
+            try {
+              const price = await this.fetchPrice(meta.dexName, meta.type, meta.poolAddr, meta.pair.tokenOut, meta.pair.baseToken);
+              if (price) { const old = PRICE_CACHE.get(meta.dexName)?.get(meta.pair.tokenOut); if (price !== old) { this.updatePriceCache(meta.dexName, meta.pair.tokenOut, price); this.metrics.recordPriceUpdate(); tokensUpdated.add(meta.pair.tokenOut); } }
+            } catch { /* skip */ }
+          }
+        }
+      }
+
       // --- Batch: V2 getReserves() in one multicall ---
       if (v2Pools.length > 0) {
         try {
@@ -880,6 +947,9 @@ export class Scanner {
       for (const tokenOut of tokensUpdated) {
         this.checkSurfaces(tokenOut);
       }
+     } catch (e: any) {
+       this.logger.error('Scanner', `Poll cycle CRASHED: ${e.message?.slice(0, 200)}`);
+     }
     }, POLL_INTERVAL_MS);
 
     this.logger.info('Scanner', `Polling fallback active: refreshing ${this.poolMeta.length} pools every 30s (multicall batched)`);
