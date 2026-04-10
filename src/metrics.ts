@@ -26,6 +26,8 @@ interface PeriodStats {
   priceUpdates: number;       // Poll/WS price change events
   bestNearMiss: NearMiss | null; // Closest to profitability
   nearMissCount: number;      // Total near-misses (quoted but unprofitable)
+  oraclePredictions: number;  // Deviation events triggered
+  oracleUpdates: number;      // Confirmed oracle price updates
   startTime: number;
 }
 
@@ -36,6 +38,7 @@ function freshStats(): PeriodStats {
     simulationsRun: 0, simulationsPassed: 0, tradesExecuted: 0,
     rawGapSum: 0, netGapSum: 0, highestRawGap: 0, highestNetGap: 0,
     priceUpdates: 0, bestNearMiss: null, nearMissCount: 0,
+    oraclePredictions: 0, oracleUpdates: 0,
     startTime: Date.now(),
   };
 }
@@ -95,6 +98,16 @@ export class MetricsCollector {
   recordPriceUpdate(): void {
     this.current.priceUpdates++;
     this.lifetime.priceUpdates++;
+  }
+
+  recordOraclePrediction(): void {
+    this.current.oraclePredictions++;
+    this.lifetime.oraclePredictions++;
+  }
+
+  recordOracleUpdate(): void {
+    this.current.oracleUpdates++;
+    this.lifetime.oracleUpdates++;
   }
 
   recordNearMiss(tokenName: string, sizePct: string, profitUsd: number, profitBps: number): void {
@@ -169,6 +182,11 @@ export class MetricsCollector {
       lines.push(`Best: ${nm.tokenName} [${nm.sizePct}] $${nm.profitUsd.toFixed(4)} (${nm.profitBps.toFixed(1)}bps)`);
     } else if (s.quotesSucceeded > 0) {
       lines.push(``, `⚠️ ${s.quotesSucceeded} quotes passed but no near-miss data — check round-trip profitability`);
+    }
+
+    // Oracle prediction stats
+    if (s.oraclePredictions > 0 || s.oracleUpdates > 0) {
+      lines.push(``, `🔮 Oracle: ${s.oraclePredictions} predictions | ${s.oracleUpdates} confirmed updates`);
     }
 
     const msg = lines.join('\n');

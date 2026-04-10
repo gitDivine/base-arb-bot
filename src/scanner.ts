@@ -71,6 +71,8 @@ export class Scanner {
   private token0Cache: Map<string, string> = new Map(); // poolAddr => token0 address
   private phantomStrikes: Map<string, number> = new Map(); // tokenOut => consecutive phantom gap count
   private readonly PHANTOM_STRIKE_LIMIT = 5; // Auto-exclude after 5 consecutive phantoms
+  private highAlertUntil = 0; // Timestamp — high-alert mode active until this time
+  private highAlertAsset = ''; // Which oracle asset triggered high-alert
 
   private metrics: MetricsCollector;
 
@@ -95,6 +97,48 @@ export class Scanner {
   }
 
   getMetrics(): MetricsCollector { return this.metrics; }
+
+  // Get DEX price for a token (used by oracle monitor for deviation comparison)
+  getDexPrice(tokenAddress: string): number | undefined {
+    // Check all DEX price caches for this token
+    for (const [_dexName, priceMap] of PRICE_CACHE) {
+      const price = priceMap.get(tokenAddress);
+      if (price && price > 0) return price;
+    }
+    return undefined;
+  }
+
+  // MEV Stage 1: Oracle deviation detected — enter high-alert mode
+  triggerHighAlert(asset: string, direction: 'up' | 'down'): void {
+    this.highAlertUntil = Date.now() + 60_000; // 60s high-alert window
+    this.highAlertAsset = asset;
+    this.logger.warn('Scanner', `⚡ HIGH-ALERT: ${asset} oracle update predicted (${direction}). Scanning all surfaces...`);
+
+    // Immediately scan all surfaces for every watched token
+    for (const pair of CONFIG.scanner.watchPairs) {
+      this.checkSurfaces(pair.tokenOut);
+    }
+  }
+
+  // MEV Stage 1: Oracle confirmed update — immediate full scan
+  triggerOracleUpdate(asset: string, oldPrice: number, newPrice: number): void {
+    const changePct = ((newPrice - oldPrice) / oldPrice * 100).toFixed(3);
+    this.logger.success('Scanner', `🔔 Oracle update confirmed: ${asset} $${oldPrice.toFixed(2)} → $${newPrice.toFixed(2)} (${changePct}%). Full surface scan...`);
+
+    // Force immediate price refresh + surface check for all tokens
+    // The oracle update will cause DEX prices to shift — scan immediately
+    for (const pair of CONFIG.scanner.watchPairs) {
+      this.checkSurfaces(pair.tokenOut);
+    }
+
+    // Reset phantom strikes for tokens related to this asset
+    // Oracle updates create real gaps, not phantoms
+    this.phantomStrikes.clear();
+  }
+
+  isHighAlert(): boolean {
+    return Date.now() < this.highAlertUntil;
+  }
 
   async start(): Promise<void> {
     this.logger.info('Scanner', 'Initializing multi-DEX monitor...');

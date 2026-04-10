@@ -43,7 +43,12 @@ const CONFIG_BY_CHAIN: any = {
     surfaces: [
       { name: 'UniV3_Aero_USDC', dex1: 'uniswapV3', dex2: 'aerodrome', baseAsset: addr('0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913') },
       { name: 'UniV3_Aero_WETH', dex1: 'uniswapV3', dex2: 'aerodrome', baseAsset: addr('0x4200000000000000000000000000000000000006') },
-    ]
+    ],
+    oracleFeeds: [
+      { asset: 'ETH',  feedAddress: '0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70', deviationThreshold: 0.15, heartbeatSeconds: 1200, tokenAddress: addr('0x4200000000000000000000000000000000000006') },
+      { asset: 'BTC',  feedAddress: '0xCCADC697c55bbB68dc5bCdf8d3CBe83CdD4E071E', deviationThreshold: 0.15, heartbeatSeconds: 1200, tokenAddress: addr('0xcbB7C0000ab88b473b1f5afd9ef808440eed33Bf') },
+      { asset: 'USDC', feedAddress: '0x7e860098F58bBFC8648a4311b374B1D669a2bc6B', deviationThreshold: 0.10, heartbeatSeconds: 86400, tokenAddress: addr('0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913') },
+    ],
   },
   arbitrum: {
     name: 'Arbitrum One',
@@ -101,7 +106,14 @@ const CONFIG_BY_CHAIN: any = {
       { name: 'UniV3_Camelot_WETH', dex1: 'uniswapV3', dex2: 'camelotV3', baseAsset: addr('0x82aF49447D8a07e3bd95BD0d56f352415231aA11') },
       { name: 'UniV3_Ramses_USDC',  dex1: 'uniswapV3', dex2: 'ramses',    baseAsset: addr('0xaf88d065e77c8cC2239327C5EDb3A432268e5831') },
       { name: 'UniV3_Ramses_WETH',  dex1: 'uniswapV3', dex2: 'ramses',    baseAsset: addr('0x82aF49447D8a07e3bd95BD0d56f352415231aA11') },
-    ]
+    ],
+    oracleFeeds: [
+      { asset: 'ETH',  feedAddress: '0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612', deviationThreshold: 0.15, heartbeatSeconds: 3600, tokenAddress: addr('0x82aF49447D8a07e3bd95BD0d56f352415231aA11') },
+      { asset: 'BTC',  feedAddress: '0x6ce185860a4963106506C203335A2910413708e9', deviationThreshold: 0.15, heartbeatSeconds: 3600, tokenAddress: addr('0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f') },
+      { asset: 'ARB',  feedAddress: '0xb2A824043730FE05F3DA2efaFa1CBbe83fa548D6', deviationThreshold: 0.50, heartbeatSeconds: 86400, tokenAddress: addr('0x912CE59144191C1204E64559FE8253a0e49E6548') },
+      { asset: 'GMX',  feedAddress: '0xDB98056FecFff59D032aB628337A4887110df3dB', deviationThreshold: 0.50, heartbeatSeconds: 86400, tokenAddress: addr('0xfc5A1A6EB076a2C7aD06eD22C90d7E710E35ad0a') },
+      { asset: 'LINK', feedAddress: '0x86E53CF1B870786351Da77A57575e79CB55812CB', deviationThreshold: 0.50, heartbeatSeconds: 3600, tokenAddress: addr('0xf97f4df75117a78c1A5a0ADb814Af6572A704043') },
+    ],
   }
 };
 
@@ -146,6 +158,11 @@ export const CONFIG = {
   telegram: {
     botToken: process.env.TELEGRAM_BOT_TOKEN || '',
     chatId: process.env.TELEGRAM_CHAT_ID || '',
+  },
+  oracle: {
+    feeds: ACTIVE_CONFIG.oracleFeeds || [],
+    pollIntervalMs: 15000,  // 15s — faster than regular pool polling
+    alertPollIntervalMs: 5000, // 5s — during high-alert (prediction active)
   },
   dryRun: process.env.DRY_RUN === 'true',
 };

@@ -10,6 +10,7 @@ import { Discovery } from './discovery';
 import { Logger } from './logger';
 import { RateLimiter } from './rate-limiter';
 import { MetricsCollector } from './metrics';
+import { OracleMonitor } from './oracle-monitor';
 import { execSync } from 'child_process';
 
 function autoUpdate(): void {
@@ -76,6 +77,25 @@ async function startBot(retryCount = 0): Promise<void> {
     // Start WebSocket scanner + metrics reporting
     await scanner.start();
     metrics.startReporting();
+
+    // MEV Stage 1 — Chainlink Oracle Prediction
+    const oracle = new OracleMonitor(wallet.provider, logger, (tokenAddr) => scanner.getDexPrice(tokenAddr));
+
+    oracle.onDeviation((event) => {
+      if (event.predictedUpdate) {
+        // Enter high-alert mode: scan all surfaces for the affected token
+        scanner.triggerHighAlert(event.asset, event.direction);
+        metrics.recordOraclePrediction();
+      }
+    });
+
+    oracle.onOracleUpdate((asset, oldPrice, newPrice) => {
+      // Oracle confirmed update — immediately scan all surfaces
+      scanner.triggerOracleUpdate(asset, oldPrice, newPrice);
+      metrics.recordOracleUpdate();
+    });
+
+    await oracle.start();
 
     logger.success('Bot', `Live on ${CONFIG.chain.name}. Listening for price gaps >= ${CONFIG.arb.minProfitBps}bps`);
 
