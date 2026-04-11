@@ -27,6 +27,13 @@ const CONFIG_BY_CHAIN: any = {
       uniswapV3QuoterV2: { address: addr('0xB048Bbc1Ee6b733FFfCFb9e9CeF7375518e25997'), dexType: 'uniswapV3' },
       aerodromeRouter: { address: addr('0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43'), dexType: 'aerodrome' },
       aerodromeFactory: { address: addr('0x420DD381b31aEf6683db6B902084cB0FFECe40Da'), dexType: 'aerodrome' },
+      // Intra-DEX virtual DEXes — same router/factory, fee-locked
+      uniV3_500Router: { address: addr('0x2626664c2603336E57B271c5C0b26F421741e481'), dexType: 'uniswapV3' },
+      uniV3_500Factory: { address: addr('0x33128a8fC17869897dcE68Ed026d694621f6FDfD'), dexType: 'uniswapV3' },
+      uniV3_3000Router: { address: addr('0x2626664c2603336E57B271c5C0b26F421741e481'), dexType: 'uniswapV3' },
+      uniV3_3000Factory: { address: addr('0x33128a8fC17869897dcE68Ed026d694621f6FDfD'), dexType: 'uniswapV3' },
+      uniV3_10000Router: { address: addr('0x2626664c2603336E57B271c5C0b26F421741e481'), dexType: 'uniswapV3' },
+      uniV3_10000Factory: { address: addr('0x33128a8fC17869897dcE68Ed026d694621f6FDfD'), dexType: 'uniswapV3' },
     },
     aave: {
       pool: addr('0xA238Dd80C259a72e81d7e4664a9801593F98d1c5'),
@@ -41,8 +48,14 @@ const CONFIG_BY_CHAIN: any = {
       { tokenOut: addr('0xb794705e505299B7fF661B677EA9EE473254a5bf'), baseToken: addr('0x4200000000000000000000000000000000000006'), fee: 10000, name: 'MAGA' },
     ],
     surfaces: [
+      // Cross-DEX surfaces
       { name: 'UniV3_Aero_USDC', dex1: 'uniswapV3', dex2: 'aerodrome', baseAsset: addr('0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913') },
       { name: 'UniV3_Aero_WETH', dex1: 'uniswapV3', dex2: 'aerodrome', baseAsset: addr('0x4200000000000000000000000000000000000006') },
+      // Intra-DEX surfaces — same DEX, different fee tiers
+      { name: 'IntraDex_500v3000_USDC', dex1: 'uniV3_500', dex2: 'uniV3_3000', baseAsset: addr('0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913') },
+      { name: 'IntraDex_500v3000_WETH', dex1: 'uniV3_500', dex2: 'uniV3_3000', baseAsset: addr('0x4200000000000000000000000000000000000006') },
+      { name: 'IntraDex_500v10000_WETH', dex1: 'uniV3_500', dex2: 'uniV3_10000', baseAsset: addr('0x4200000000000000000000000000000000000006') },
+      { name: 'IntraDex_3000v10000_WETH', dex1: 'uniV3_3000', dex2: 'uniV3_10000', baseAsset: addr('0x4200000000000000000000000000000000000006') },
     ],
     oracleFeeds: [
       { asset: 'ETH',  feedAddress: '0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70', deviationThreshold: 0.15, heartbeatSeconds: 1200, tokenAddress: addr('0x4200000000000000000000000000000000000006') },
@@ -81,6 +94,13 @@ const CONFIG_BY_CHAIN: any = {
       camelotV3Factory: { address: addr('0x1a3c9B1d2F0529D97f2afC5136Cc23e58f1FD35B'), dexType: 'camelotV3' },
       ramsesRouter: { address: addr('0xAAA87963EFe74394b91747FA733E3917d68180E7'), dexType: 'ramses' },
       ramsesFactory: { address: addr('0xd0019e86edB35E1fedaaB03aED5c3c60f115d28b'), dexType: 'ramses' }, // Ramses V3 CL (correct factory)
+      // Intra-DEX virtual DEXes — same UniV3 router/factory, fee-locked
+      uniV3_500Router: { address: addr('0xE592427A0AEce92De3Edee1F18E0157C05861564'), dexType: 'uniswapV3' },
+      uniV3_500Factory: { address: addr('0x1F98431c8aD98523631AE4a59f267346ea31F984'), dexType: 'uniswapV3' },
+      uniV3_3000Router: { address: addr('0xE592427A0AEce92De3Edee1F18E0157C05861564'), dexType: 'uniswapV3' },
+      uniV3_3000Factory: { address: addr('0x1F98431c8aD98523631AE4a59f267346ea31F984'), dexType: 'uniswapV3' },
+      uniV3_10000Router: { address: addr('0xE592427A0AEce92De3Edee1F18E0157C05861564'), dexType: 'uniswapV3' },
+      uniV3_10000Factory: { address: addr('0x1F98431c8aD98523631AE4a59f267346ea31F984'), dexType: 'uniswapV3' },
     },
     aave: {
       pool: addr('0x794a61358D6845594F94dc1DB02A252b5b4814aD'),
@@ -102,10 +122,15 @@ const CONFIG_BY_CHAIN: any = {
       { tokenOut: addr('0x13Ad51ed4F1B7e9Dc168d8a00cB3f4dDD85EfA60'), baseToken: addr('0x82aF49447D8a07e3bd95BD0d56f352415231aA11'), fee: 3000, name: 'LDO'       },
     ],
     surfaces: [
+      // Cross-DEX surfaces
       { name: 'UniV3_Camelot_USDC', dex1: 'uniswapV3', dex2: 'camelotV3', baseAsset: addr('0xaf88d065e77c8cC2239327C5EDb3A432268e5831') },
       { name: 'UniV3_Camelot_WETH', dex1: 'uniswapV3', dex2: 'camelotV3', baseAsset: addr('0x82aF49447D8a07e3bd95BD0d56f352415231aA11') },
       { name: 'UniV3_Ramses_USDC',  dex1: 'uniswapV3', dex2: 'ramses',    baseAsset: addr('0xaf88d065e77c8cC2239327C5EDb3A432268e5831') },
       { name: 'UniV3_Ramses_WETH',  dex1: 'uniswapV3', dex2: 'ramses',    baseAsset: addr('0x82aF49447D8a07e3bd95BD0d56f352415231aA11') },
+      // Intra-DEX surfaces — same UniV3, different fee tiers
+      { name: 'IntraDex_500v3000_USDC', dex1: 'uniV3_500', dex2: 'uniV3_3000', baseAsset: addr('0xaf88d065e77c8cC2239327C5EDb3A432268e5831') },
+      { name: 'IntraDex_500v3000_WETH', dex1: 'uniV3_500', dex2: 'uniV3_3000', baseAsset: addr('0x82aF49447D8a07e3bd95BD0d56f352415231aA11') },
+      { name: 'IntraDex_500v10000_WETH', dex1: 'uniV3_500', dex2: 'uniV3_10000', baseAsset: addr('0x82aF49447D8a07e3bd95BD0d56f352415231aA11') },
     ],
     oracleFeeds: [
       { asset: 'ETH',  feedAddress: '0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612', deviationThreshold: 0.15, heartbeatSeconds: 3600, tokenAddress: addr('0x82aF49447D8a07e3bd95BD0d56f352415231aA11') },

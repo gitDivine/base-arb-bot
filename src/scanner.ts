@@ -125,15 +125,25 @@ export class Scanner {
     const changePct = ((newPrice - oldPrice) / oldPrice * 100).toFixed(3);
     this.logger.success('Scanner', `🔔 Oracle update confirmed: ${asset} $${oldPrice.toFixed(2)} → $${newPrice.toFixed(2)} (${changePct}%). Full surface scan...`);
 
-    // Force immediate price refresh + surface check for all tokens
-    // The oracle update will cause DEX prices to shift — scan immediately
-    for (const pair of CONFIG.scanner.watchPairs) {
-      this.checkSurfaces(pair.tokenOut);
-    }
+    // Find which tokens use the updated oracle asset as their baseToken
+    // e.g., ETH oracle update → reset strikes for tokens paired with WETH
+    const oracleFeeds = CONFIG.oracle?.feeds || [];
+    const updatedFeed = oracleFeeds.find((f: any) => f.asset === asset);
+    const relatedTokenAddress = updatedFeed?.tokenAddress?.toLowerCase();
 
-    // Reset phantom strikes for tokens related to this asset
-    // Oracle updates create real gaps, not phantoms
-    this.phantomStrikes.clear();
+    for (const pair of CONFIG.scanner.watchPairs) {
+      // Only scan and reset strikes for tokens related to the oracle update
+      const isRelated = relatedTokenAddress && (
+        pair.baseToken.toLowerCase() === relatedTokenAddress ||
+        pair.tokenOut.toLowerCase() === relatedTokenAddress
+      );
+
+      this.checkSurfaces(pair.tokenOut);
+
+      if (isRelated) {
+        this.phantomStrikes.delete(pair.tokenOut);
+      }
+    }
   }
 
   isHighAlert(): boolean {
@@ -196,20 +206,32 @@ export class Scanner {
               if (poolAddr && poolAddr !== ethers.ZeroAddress) break;
             }
           } else {
-            // Always prefer cheapest fee tier — scan from lowest to highest
             const factory = new ethers.Contract(dex.factory, UNI_V3_FACTORY_ABI, this.wallet.provider);
-            let actualFee = pair.fee;
-            let foundPool = ethers.ZeroAddress;
-            for (const f of [100, 500, 3000, 10000]) {
-              const addr = await factory.getPool(pair.baseToken, pair.tokenOut, f);
-              if (addr && addr !== ethers.ZeroAddress) { foundPool = addr; actualFee = f; break; }
-            }
-            poolAddr = foundPool;
-            // Cache the cheapest fee tier discovered on-chain
-            if (poolAddr && poolAddr !== ethers.ZeroAddress) {
-              this.feeCache.set(`${dex.name}_${pair.tokenOut}`, actualFee);
-              if (actualFee !== pair.fee) {
-                this.logger.info('Scanner', `${dex.name} ${pair.name}: using fee tier ${actualFee} (${actualFee/100}bps) instead of default ${pair.fee}`);
+            // Check if this is a fee-locked virtual DEX (e.g., uniV3_500 → force fee 500)
+            const feeMatch = dex.name.match(/_(\d+)$/);
+            if (feeMatch) {
+              // Intra-DEX: locked to specific fee tier
+              const lockedFee = parseInt(feeMatch[1]);
+              const addr = await factory.getPool(pair.baseToken, pair.tokenOut, lockedFee);
+              if (addr && addr !== ethers.ZeroAddress) {
+                poolAddr = addr;
+                this.feeCache.set(`${dex.name}_${pair.tokenOut}`, lockedFee);
+              }
+            } else {
+              // Standard: prefer cheapest fee tier — scan from lowest to highest
+              let actualFee = pair.fee;
+              let foundPool = ethers.ZeroAddress;
+              for (const f of [100, 500, 3000, 10000]) {
+                const addr = await factory.getPool(pair.baseToken, pair.tokenOut, f);
+                if (addr && addr !== ethers.ZeroAddress) { foundPool = addr; actualFee = f; break; }
+              }
+              poolAddr = foundPool;
+              // Cache the cheapest fee tier discovered on-chain
+              if (poolAddr && poolAddr !== ethers.ZeroAddress) {
+                this.feeCache.set(`${dex.name}_${pair.tokenOut}`, actualFee);
+                if (actualFee !== pair.fee) {
+                  this.logger.info('Scanner', `${dex.name} ${pair.name}: using fee tier ${actualFee} (${actualFee/100}bps) instead of default ${pair.fee}`);
+                }
               }
             }
           }
