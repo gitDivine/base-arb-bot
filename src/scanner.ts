@@ -110,9 +110,13 @@ export class Scanner {
 
   // MEV Stage 1: Oracle deviation detected — enter high-alert mode
   triggerHighAlert(asset: string, direction: 'up' | 'down'): void {
+    const wasAlready = Date.now() < this.highAlertUntil;
     this.highAlertUntil = Date.now() + 60_000; // 60s high-alert window
     this.highAlertAsset = asset;
-    this.logger.warn('Scanner', `⚡ HIGH-ALERT: ${asset} oracle update predicted (${direction}). Scanning all surfaces...`);
+    // Only log on new alert, not extensions of existing alert
+    if (!wasAlready) {
+      this.logger.warn('Scanner', `⚡ HIGH-ALERT: ${asset} (${direction}). Scanning...`);
+    }
 
     // Immediately scan all surfaces for every watched token
     for (const pair of CONFIG.scanner.watchPairs) {
@@ -122,25 +126,25 @@ export class Scanner {
 
   // MEV Stage 1: Oracle confirmed update — immediate full scan
   triggerOracleUpdate(asset: string, oldPrice: number, newPrice: number): void {
-    const changePct = ((newPrice - oldPrice) / oldPrice * 100).toFixed(3);
-    this.logger.success('Scanner', `🔔 Oracle update confirmed: ${asset} $${oldPrice.toFixed(2)} → $${newPrice.toFixed(2)} (${changePct}%). Full surface scan...`);
+    const changePctNum = Math.abs((newPrice - oldPrice) / oldPrice * 100);
+    // Only log significant oracle updates (>0.3%) to reduce Telegram noise
+    if (changePctNum >= 0.3) {
+      const changePct = ((newPrice - oldPrice) / oldPrice * 100).toFixed(3);
+      this.logger.success('Scanner', `🔔 Oracle: ${asset} $${oldPrice.toFixed(2)} → $${newPrice.toFixed(2)} (${changePct}%). Scanning...`);
+    }
 
-    // Find which tokens use the updated oracle asset as their baseToken
-    // e.g., ETH oracle update → reset strikes for tokens paired with WETH
+    // Only reset phantom strikes for the EXACT token that the oracle tracks
+    // e.g., ETH oracle → only reset WETH tokenOut strikes, NOT every WETH-paired token
     const oracleFeeds = CONFIG.oracle?.feeds || [];
     const updatedFeed = oracleFeeds.find((f: any) => f.asset === asset);
     const relatedTokenAddress = updatedFeed?.tokenAddress?.toLowerCase();
 
     for (const pair of CONFIG.scanner.watchPairs) {
-      // Only scan and reset strikes for tokens related to the oracle update
-      const isRelated = relatedTokenAddress && (
-        pair.baseToken.toLowerCase() === relatedTokenAddress ||
-        pair.tokenOut.toLowerCase() === relatedTokenAddress
-      );
-
       this.checkSurfaces(pair.tokenOut);
 
-      if (isRelated) {
+      // Only reset strikes if this token IS the oracle asset (e.g., WETH itself)
+      // NOT tokens that merely use it as baseToken (e.g., VIRTUAL/WETH)
+      if (relatedTokenAddress && pair.tokenOut.toLowerCase() === relatedTokenAddress) {
         this.phantomStrikes.delete(pair.tokenOut);
       }
     }

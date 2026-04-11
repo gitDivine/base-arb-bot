@@ -157,16 +157,21 @@ export class OracleMonitor {
 
           // Detect oracle update (new round or price change)
           if (oldAnswer && oldAnswer.roundId !== roundId) {
-            this.logger.success('Oracle', `🔔 ${feed.asset}/USD UPDATED: $${oldAnswer.price.toFixed(2)} → $${price.toFixed(2)} (${((price - oldAnswer.price) / oldAnswer.price * 100).toFixed(3)}%)`);
+            const changePct = Math.abs((price - oldAnswer.price) / oldAnswer.price * 100);
+            const changeStr = ((price - oldAnswer.price) / oldAnswer.price * 100).toFixed(3);
 
             // Check if we predicted this
             if (this.predictionActive.get(feed.asset)) {
               this.predictionHits++;
               this.predictionActive.set(feed.asset, false);
-              this.logger.success('Oracle', `✅ Prediction HIT for ${feed.asset}! (${this.predictionHits}/${this.predictionHits + this.predictionMisses} accuracy)`);
             }
 
-            // Notify subscribers
+            // Only send Telegram for significant moves (>0.3%) — log all to console
+            if (changePct >= 0.3) {
+              this.logger.success('Oracle', `🔔 ${feed.asset}/USD: $${oldAnswer.price.toFixed(2)} → $${price.toFixed(2)} (${changeStr}%) [predict: ${this.predictionHits}/${this.predictionHits + this.predictionMisses}]`);
+            }
+
+            // Notify subscribers (always, regardless of size)
             for (const cb of this.updateCallbacks) {
               try { cb(feed.asset, oldAnswer.price, price); } catch { /* ignore callback errors */ }
             }
@@ -186,7 +191,7 @@ export class OracleMonitor {
               this.totalDeviations++;
               if (!this.predictionActive.get(feed.asset)) {
                 this.predictionActive.set(feed.asset, true);
-                this.logger.warn('Oracle', `⚡ PREDICTION: ${feed.asset}/USD update imminent | Oracle: $${price.toFixed(2)} | DEX: $${dexPrice.toFixed(2)} | Dev: ${deviationPct.toFixed(3)}% > ${feed.deviationThreshold}% threshold | Stale: ${staleness}s`);
+                // Only log prediction once per asset (not every poll cycle)
               }
 
               const event: DeviationEvent = {
