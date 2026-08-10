@@ -417,7 +417,8 @@ export class Scanner {
     if (bestGap > 500) return; // Skip outlier
 
     // --- Dynamic Thresholding Logic ---
-    if (netGap > 0) {
+    // Only track realistic gaps (< 50 bps) to prevent poisoning from illiquid phantom pools
+    if (netGap > 0 && netGap < 50) {
       this.recentPositiveGaps.push(netGap);
       if (this.recentPositiveGaps.length > 50) this.recentPositiveGaps.shift(); // Keep last 50
       
@@ -425,9 +426,9 @@ export class Scanner {
       const sortedGaps = [...this.recentPositiveGaps].sort((a, b) => a - b);
       const p75 = sortedGaps[Math.floor(sortedGaps.length * 0.75)];
       
-      // Bound the dynamic threshold between the configured floor and 80% of p75
+      // Bound the dynamic threshold between the configured floor and 80% of p75 (max 10 bps to prevent lock-out)
       const dynamicTarget = p75 * 0.8;
-      this.dynamicMinProfitBps = Math.max(CONFIG.arb.minProfitBps, dynamicTarget);
+      this.dynamicMinProfitBps = Math.min(10.0, Math.max(CONFIG.arb.minProfitBps, dynamicTarget));
     }
 
     // Record gap metrics (every evaluation, not just those that pass)
@@ -512,27 +513,29 @@ export class Scanner {
       const results = await this.multicall.tryAggregate.staticCall(false, calls);
       return results.map((res: any, i: number) => {
         if (!res.success || res.returnData === '0x') return null;
-        const req = requests[i];
-        if (req.dexName.includes('camelot') && CONFIG.chain.chainId === 42161) {
-          const quoter = new ethers.Interface(ALGEBRA_QUOTER_ABI);
-          const decoded = quoter.decodeFunctionResult('quoteExactInputSingle', res.returnData);
-          return decoded.amountOut;
-        } else if ((req.dexName.includes('ramses') && CONFIG.chain.chainId === 42161) || req.dexName.toLowerCase().includes('v3') || req.dexName.toLowerCase().includes('uniswap') || req.dexName.toLowerCase().includes('slipstream')) {
-          const quoter = new ethers.Interface(UNI_V3_QUOTER_V2_ABI);
-          const decoded = quoter.decodeFunctionResult('quoteExactInputSingle', res.returnData);
-          return decoded.amountOut;
-        } else {
-          const router = new ethers.Interface(['function getAmountsOut(uint256 amountIn, address[] path) view returns (uint256[] amounts)']);
-          const decoded = router.decodeFunctionResult('getAmountsOut', res.returnData);
-          const amounts = decoded.amounts;
-          return amounts[amounts.length - 1];
+        try {
+          const req = requests[i];
+          if (req.dexName.includes('camelot') && CONFIG.chain.chainId === 42161) {
+            const quoter = new ethers.Interface(ALGEBRA_QUOTER_ABI);
+            const decoded = quoter.decodeFunctionResult('quoteExactInputSingle', res.returnData);
+            return decoded.amountOut;
+          } else if ((req.dexName.includes('ramses') && CONFIG.chain.chainId === 42161) || req.dexName.toLowerCase().includes('v3') || req.dexName.toLowerCase().includes('uniswap') || req.dexName.toLowerCase().includes('slipstream')) {
+            const quoter = new ethers.Interface(UNI_V3_QUOTER_V2_ABI);
+            const decoded = quoter.decodeFunctionResult('quoteExactInputSingle', res.returnData);
+            return decoded.amountOut;
+          } else {
+            const router = new ethers.Interface(['function getAmountsOut(uint256 amountIn, address[] path) view returns (uint256[] amounts)']);
+            const decoded = router.decodeFunctionResult('getAmountsOut', res.returnData);
+            const amounts = decoded.amounts;
+            return amounts[amounts.length - 1];
+          }
+        } catch {
+          return null;
         }
       });
     } catch (e: any) {
-      // Fallback: if batched Multicall staticCall fails at RPC level due to thin liquidity / QuoterV2 revert, query requests individually
-      return Promise.all(
-        requests.map(req => this.getOnChainQuote(req.dexName, req.tokenIn, req.tokenOut, req.amountIn, req.fee))
-      );
+      this.logger.debug('Scanner', `Batch quote failed: ${e.message.slice(0, 100)}`);
+      return requests.map(() => null);
     }
   }
 
