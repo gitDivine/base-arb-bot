@@ -126,8 +126,8 @@ const CONFIG_BY_CHAIN: any = {
       // --- Low Fee Tier & High Volume Majors (1bps & 5bps pools — 10-15bps total friction) ---
       { tokenOut: addr('0x82aF49447D8a07e3bd95BD0d56f352415231aA11'), baseToken: addr('0xaf88d065e77c8cC2239327C5EDb3A432268e5831'), fee: 500,  name: 'WETH-USDC-5bps' }, // 5bps UniV3 WETH/USDC ($100M+ TVL)
       { tokenOut: addr('0x82aF49447D8a07e3bd95BD0d56f352415231aA11'), baseToken: addr('0xaf88d065e77c8cC2239327C5EDb3A432268e5831'), fee: 100,  name: 'WETH-USDC-1bps' }, // 1bps UniV3 WETH/USDC
-      { tokenOut: addr('0x912CE59144191C1204E64559FE8253a0e49E6548'), baseToken: addr('0xaf88d065e77c8cC2239327C5EDb3A432268e5831'), fee: 500,  name: 'ARB-5bps'       }, // ARB/USDC 5bps ($2.4M Camelot vs UniV3)
-      { tokenOut: addr('0x912CE59144191C1204E64559FE8253a0e49E6548'), baseToken: addr('0x82aF49447D8a07e3bd95BD0d56f352415231aA11'), fee: 500,  name: 'ARB-WETH-5bps'  },
+      // { tokenOut: addr('0x912CE59144191C1204E64559FE8253a0e49E6548'), baseToken: addr('0xaf88d065e77c8cC2239327C5EDb3A432268e5831'), fee: 500,  name: 'ARB-5bps'       }, // Broken/dust pool causing massive slippage on Camelot/Ramses
+      // { tokenOut: addr('0x912CE59144191C1204E64559FE8253a0e49E6548'), baseToken: addr('0x82aF49447D8a07e3bd95BD0d56f352415231aA11'), fee: 500,  name: 'ARB-WETH-5bps'  },
       { tokenOut: addr('0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f'), baseToken: addr('0xaf88d065e77c8cC2239327C5EDb3A432268e5831'), fee: 500,  name: 'WBTC-USDC'      }, // WBTC/USDC 5bps
       { tokenOut: addr('0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f'), baseToken: addr('0x82aF49447D8a07e3bd95BD0d56f352415231aA11'), fee: 500,  name: 'WBTC'           }, // WBTC/WETH 5bps
       { tokenOut: addr('0x0c888319139947844059639149183cc48b11166b'), baseToken: addr('0xaf88d065e77c8cC2239327C5EDb3A432268e5831'), fee: 500,  name: 'PENDLE-5bps'    }, // PENDLE 5bps
