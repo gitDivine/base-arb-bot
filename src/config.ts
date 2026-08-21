@@ -40,9 +40,9 @@ const CONFIG_BY_CHAIN: any = {
       uniV3_10000Router: { address: addr('0x2626664c2603336E57B271c5C0b26F421741e481'), dexType: 'uniswapV3' },
       uniV3_10000Factory: { address: addr('0x33128a8fC17869897dcE68Ed026d694621f6FDfD'), dexType: 'uniswapV3' },
     },
-    aave: {
-      pool: addr('0xA238Dd80C259a72e81d7e4664a9801593F98d1c5'),
-      flashFee: 0.0005,
+    balancer: {
+      vault: addr('0xBA12222222228d8Ba445958a75a0704d566BF2C8'),
+      flashFee: 0.0,
     },
     watchPairs: [
       // --- Low Fee Tier & High Volume Majors (1bps & 5bps pools — 10-15bps total friction) ---
@@ -118,9 +118,9 @@ const CONFIG_BY_CHAIN: any = {
       uniV3_10000Router: { address: addr('0xE592427A0AEce92De3Edee1F18E0157C05861564'), dexType: 'uniswapV3' },
       uniV3_10000Factory: { address: addr('0x1F98431c8aD98523631AE4a59f267346ea31F984'), dexType: 'uniswapV3' },
     },
-    aave: {
-      pool: addr('0x794a61358D6845594F94dc1DB02A252b5b4814aD'),
-      flashFee: 0.0005,
+    balancer: {
+      vault: addr('0xBA12222222228d8Ba445958a75a0704d566BF2C8'),
+      flashFee: 0.0,
     },
     watchPairs: [
       // --- Low Fee Tier & High Volume Majors (1bps & 5bps pools — 10-15bps total friction) ---
@@ -175,13 +175,13 @@ export const CONFIG = {
   },
   tokens: ACTIVE_CONFIG.tokens,
   dexes: ACTIVE_CONFIG.dexes,
-  aave: ACTIVE_CONFIG.aave,
+  balancer: ACTIVE_CONFIG.balancer,
   arb: {
     flashLoanAmountUsdc: 1000, // $1,000 USDC — 10x more profit per gap
     flashLoanAmountWeth: 0.5,  // ~0.5 WETH ($1,750) — 10x more profit per gap
     minProfitUsdc: 0.01, // $0.01 net profit — any real profit after all costs
     minProfitBps: 2.0,   // 2bps gap — lower threshold for low-gas L2 execution (Base/Arbitrum)
-    flashFee: 0.0005,
+    flashFee: 0.0,
     cooldownMs: 1000,
     maxGasGwei: 50.0,
   },

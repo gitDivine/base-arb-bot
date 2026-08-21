@@ -7,12 +7,22 @@ interface IERC20 {
     function balanceOf(address account) external view returns (uint256);
 }
 
-interface IFlashLoanSimpleReceiver {
-    function executeOperation(address asset, uint256 amount, uint256 premium, address initiator, bytes calldata params) external returns (bool);
+interface IFlashLoanRecipient {
+    function receiveFlashLoan(
+        IERC20[] calldata tokens,
+        uint256[] calldata amounts,
+        uint256[] calldata feeAmounts,
+        bytes calldata userData
+    ) external;
 }
 
-interface IAavePool {
-    function flashLoanSimple(address receiverAddress, address asset, uint256 amount, bytes calldata params, uint16 referralCode) external;
+interface IBalancerVault {
+    function flashLoan(
+        address recipient,
+        address[] calldata tokens,
+        uint256[] calldata amounts,
+        bytes calldata userData
+    ) external;
 }
 
 interface IUniswapV2Router {
@@ -44,8 +54,8 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 
-contract ArbBot is IFlashLoanSimpleReceiver, Ownable, ReentrancyGuard, Pausable {
-    IAavePool  public immutable AAVE_POOL;
+contract ArbBot is IFlashLoanRecipient, Ownable, ReentrancyGuard, Pausable {
+    IBalancerVault public immutable BALANCER_VAULT;
 
     enum DexType { UNISWAP_V2, UNISWAP_V3, SOLIDLY, ALGEBRA }
 
@@ -60,8 +70,8 @@ contract ArbBot is IFlashLoanSimpleReceiver, Ownable, ReentrancyGuard, Pausable 
     event ArbitrageExecuted(address tokenIn, address tokenOut, uint256 profit, address router1, address router2);
     event ProfitWithdrawn(address token, uint256 amount);
 
-    constructor(address _pool) Ownable(msg.sender) {
-        AAVE_POOL = IAavePool(_pool);
+    constructor(address _vault) Ownable(msg.sender) {
+        BALANCER_VAULT = IBalancerVault(_vault);
     }
 
     function startArbitrage(
@@ -72,23 +82,30 @@ contract ArbBot is IFlashLoanSimpleReceiver, Ownable, ReentrancyGuard, Pausable 
         SwapLeg calldata leg2, 
         uint256 minProfit
     ) external onlyOwner whenNotPaused {
-        bytes memory params = abi.encode(flashAsset, tokenOut, leg1, leg2, minProfit);
-        AAVE_POOL.flashLoanSimple(address(this), flashAsset, flashAmount, params, 0);
+        bytes memory userData = abi.encode(flashAsset, tokenOut, leg1, leg2, minProfit);
+        
+        address[] memory tokens = new address[](1);
+        tokens[0] = flashAsset;
+        
+        uint256[] memory amounts = new uint256[](1);
+        amounts[0] = flashAmount;
+
+        BALANCER_VAULT.flashLoan(address(this), tokens, amounts, userData);
     }
 
-    function executeOperation(
-        address, 
-        uint256 amount, 
-        uint256 premium, 
-        address initiator, 
-        bytes calldata params
-    ) external override nonReentrant returns (bool) {
-        require(msg.sender == address(AAVE_POOL), "Untrusted caller");
-        require(initiator == address(this), "Untrusted initiator");
+    function receiveFlashLoan(
+        IERC20[] calldata tokens,
+        uint256[] calldata amounts,
+        uint256[] calldata feeAmounts,
+        bytes calldata userData
+    ) external override nonReentrant {
+        require(msg.sender == address(BALANCER_VAULT), "Untrusted caller");
 
-        (address flashAsset, address tokenOut, SwapLeg memory leg1, SwapLeg memory leg2, uint256 minProfit) = abi.decode(params, (address, address, SwapLeg, SwapLeg, uint256));
+        (address flashAsset, address tokenOut, SwapLeg memory leg1, SwapLeg memory leg2, uint256 minProfit) = abi.decode(userData, (address, address, SwapLeg, SwapLeg, uint256));
         
-        uint256 repayAmount = amount + premium;
+        uint256 amount = amounts[0];
+        uint256 feeAmount = feeAmounts[0];
+        uint256 repayAmount = amount + feeAmount;
         
         // Step 1: Buy tokenOut with flashAsset using Leg 1
         uint256 tokenAmount = _swap(leg1, flashAsset, tokenOut, amount);
@@ -100,14 +117,13 @@ contract ArbBot is IFlashLoanSimpleReceiver, Ownable, ReentrancyGuard, Pausable 
         uint256 profit = finalFlashAsset - repayAmount;
         require(profit >= minProfit, "Insufficient profit");
         
-        IERC20(flashAsset).approve(address(AAVE_POOL), repayAmount);
+        IERC20(flashAsset).approve(address(BALANCER_VAULT), repayAmount);
         
         if (profit > 0) {
             IERC20(flashAsset).transfer(owner(), profit);
         }
         
         emit ArbitrageExecuted(flashAsset, tokenOut, profit, leg1.router, leg2.router);
-        return true;
     }
 
     function _swap(SwapLeg memory leg, address from, address to, uint256 amountIn) internal returns (uint256) {

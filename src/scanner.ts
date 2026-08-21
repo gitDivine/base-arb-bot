@@ -412,7 +412,7 @@ export class Scanner {
     const sellDexName = direction === 1 ? surface.dex2 : surface.dex1;
     const fee1 = this.getDexFeeBps(buyDexName, pair.tokenOut);
     const fee2 = this.getDexFeeBps(sellDexName, pair.tokenOut);
-    const netGap = bestGap - fee1 - fee2 - 5; // -5bps for flash loan
+    const netGap = bestGap - fee1 - fee2 - (CONFIG.arb.flashFee * 10000); // 0bps for Balancer flash loan
 
     if (bestGap > 500) return; // Skip outlier
 
@@ -621,8 +621,8 @@ export class Scanner {
             continue;
           }
 
-          // Aave V3 Flashloan Fee is exactly 0.05% (5 bps)
-          const flashLoanFee = flashAmount * 0.0005;
+          // Balancer Vault Flashloan Fee is exactly 0% (0 bps)
+          const flashLoanFee = 0;
           const realProfit = Number(ethers.formatUnits(q2, baseDecimals)) - flashAmount - flashLoanFee;
           const realGapBps = (realProfit / flashAmount) * 10000;
 

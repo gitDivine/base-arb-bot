@@ -125,7 +125,7 @@ async function main() {
   console.log('\n  ╔══════════════════════════════════════╗');
   console.log(`  ║   Multi-Chain Arb Bot v1.1           ║`);
   console.log(`  ║   Chain: ${CONFIG.chain.name.padEnd(26)}  ║`);
-  console.log(`  ║   Loans: Aave V3 (FlashLoans)        ║`);
+  console.log(`  ║   Loans: Balancer (FlashLoans)       ║`);
   console.log('  ╚══════════════════════════════════════╝\n');
 
   // Run update check in background to avoid blocking initial startup
