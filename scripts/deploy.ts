@@ -93,9 +93,9 @@ async function main() {
 
     console.log('⏳ Deploying ArbBot to Arbitrum One...');
 
-    const AavePool = '0x794a61358D6845594F94dc1DB02A252b5b4814aD';
+    const BalancerVault = '0xBA12222222228d8Ba445958a75a0704d566BF2C8';
     const factory = new ethers.ContractFactory(abi, bytecode, signer);
-    const contract = await factory.deploy(AavePool);
+    const contract = await factory.deploy(BalancerVault);
     await contract.waitForDeployment();
 
     const contractAddress = await contract.getAddress();

@@ -63,8 +63,8 @@ async function main() {
     console.log(`📍 Deployer: ${signer.address}`);
     const factory = new ethers.ContractFactory(abi, bytecode, signer);
     
-    // Pass pool and usdc to the new constructor
-    const contract = await factory.deploy(ACTIVE.pool, ACTIVE.usdc);
+    // Pass vault to the new constructor
+    const contract = await factory.deploy('0xBA12222222228d8Ba445958a75a0704d566BF2C8');
     await contract.waitForDeployment();
     
     const address = await contract.getAddress();
