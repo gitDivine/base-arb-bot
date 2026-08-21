@@ -9,7 +9,7 @@ const CONFIG_BY_CHAIN: any = {
     chainId: 8453,
     rpcHttp: process.env.BASE_HTTP_URL || 'https://mainnet.base.org',
     rpcWs: process.env.BASE_WS_URL || 'wss://base.publicnode.com',
-    contractAddress: addr('0xbbFc8Bf808A0D1b964048B87c0787e03c97Cc341'),
+    contractAddress: addr('0x0A7E966899D2E709E359aaB73397ef14DB09D30e'),
     tokens: {
       USDC: addr('0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'),
       WETH: addr('0x4200000000000000000000000000000000000006'),
@@ -83,7 +83,7 @@ const CONFIG_BY_CHAIN: any = {
     chainId: 42161,
     rpcHttp: process.env.ARB_HTTP_URL || 'https://arb1.arbitrum.io/rpc',
     rpcWs: process.env.ARB_WS_URL || 'wss://arbitrum-one-rpc.publicnode.com',
-    contractAddress: addr('0x1d1D09a9f891B3E0C62f5C1A3a6dC6DA7E4FE197'),
+    contractAddress: addr('0x28aBd8b2DC27b3b8b917690B39BFc43A56fc4781'),
     tokens: {
       USDC: addr('0xaf88d065e77c8cC2239327C5EDb3A432268e5831'),
       WETH: addr('0x82aF49447D8a07e3bd95BD0d56f352415231aA11'),
